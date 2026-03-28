@@ -1,0 +1,5 @@
+2026-03-28 19:02:29,233 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0 USD
+2026-03-28 19:02:29,233 - INFO - INFO | Bot started. Monitoring symbols: ['EURUSD', 'XAUUSD', 'GBPUSD']
+2026-03-28 19:02:29,233 - INFO - INFO | Strategy: EMA Crossover (9/21) on timeframe 15
+2026-03-28 19:05:52,200 - INFO - INFO | Bot shutting down (KeyboardInterrupt)...
+2026-03-28 19:05:52,201 - INFO - INFO | MT5 connection closed gracefully.
