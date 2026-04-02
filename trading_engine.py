@@ -132,5 +132,81 @@ def place_order(symbol, order_type, atr=None):
     action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     if result.retcode == mt5.TRADE_RETCODE_DONE:
         log_trade(symbol, action_str, lots, price, sl, tp, "SUCCESS")
+        return result
     else:
         log_trade(symbol, action_str, lots, price, sl, tp, f"FAILED: {result.comment}")
+        return None
+
+def execute_signal(signal_data):
+    """Executes a parsed signal from Telegram."""
+    symbol = signal_data['symbol']
+    order_type_str = signal_data['type']
+    entry_range = signal_data['entry_range']
+    sl = signal_data['sl']
+    tps = signal_data['tps']
+    
+    # Check if symbol is available
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        log_error(f"Symbol {symbol} not found.")
+        return
+        
+    if not symbol_info.visible:
+        mt5.symbol_select(symbol, True)
+        
+    # Get current price
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        log_error(f"Failed to get price for {symbol}")
+        return
+        
+    order_type = mt5.ORDER_TYPE_BUY if order_type_str == "BUY" else mt5.ORDER_TYPE_SELL
+    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+    
+    # Check if price is in range
+    if not (entry_range[0] <= price <= entry_range[1]):
+        # Check if price is "better" than range (optional, but safer to stick to range)
+        # For BUY, price < entry_range[0] is better. For SELL, price > entry_range[1] is better.
+        is_better = (order_type == mt5.ORDER_TYPE_BUY and price < entry_range[0]) or \
+                    (order_type == mt5.ORDER_TYPE_SELL and price > entry_range[1])
+        
+        if not is_better:
+            log_info(f"Price {price} is out of entry range {entry_range}. Skipping.")
+            return
+
+    # Calculate total lot size based on SL distance
+    sl_dist = abs(price - sl)
+    total_lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
+    
+    # Split lots among TPs
+    num_tps = len(tps)
+    lots_per_tp = total_lots / num_tps
+    
+    # Normalize lots per TP
+    step = symbol_info.volume_step
+    lots_per_tp = max(symbol_info.volume_min, round(lots_per_tp / step) * step)
+    
+    log_info(f"EXECUTING SIGNAL | {symbol} {order_type_str} | Price: {price} | SL: {sl} | TPs: {tps} | Total Lots: {total_lots}")
+
+    for i, tp in enumerate(tps):
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(lots_per_tp),
+            "type": order_type,
+            "price": price,
+            "sl": float(sl),
+            "tp": float(tp),
+            "magic": config.MAGIC_NUMBER,
+            "comment": f"Telegram Signal TP{i+1}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # In a real scenario, we might want to ensure all orders succeed or handle partial failure
+        result = mt5.order_send(request)
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            log_trade(symbol, f"{order_type_str} TP{i+1}", lots_per_tp, price, sl, tp, "SUCCESS")
+        else:
+            err = mt5.last_error() if not result else result.comment
+            log_trade(symbol, f"{order_type_str} TP{i+1}", lots_per_tp, price, sl, tp, f"FAILED: {err}")

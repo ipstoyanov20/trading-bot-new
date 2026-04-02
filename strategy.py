@@ -52,6 +52,11 @@ def check_signal(symbol, timeframe):
     
     atr = df['atr'].iloc[-1]
     
+    # Log current EMA state for feedback
+    state = "ABOVE" if curr_ema_short > curr_ema_long else "BELOW"
+    from logger import log_info
+    log_info(f"STATUS | {symbol} | EMA9 is {state} EMA21 (EMA9: {curr_ema_short:.5f}, EMA21: {curr_ema_long:.5f})")
+    
     # EMA Crossover Logic
     # Buy Cross: Short was below Long, now Short is above Long
     if prev_ema_short < prev_ema_long and curr_ema_short > curr_ema_long:

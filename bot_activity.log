@@ -1,5 +1,100 @@
-2026-03-28 19:02:29,233 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0 USD
-2026-03-28 19:02:29,233 - INFO - INFO | Bot started. Monitoring symbols: ['EURUSD', 'XAUUSD', 'GBPUSD']
-2026-03-28 19:02:29,233 - INFO - INFO | Strategy: EMA Crossover (9/21) on timeframe 15
-2026-03-28 19:05:52,200 - INFO - INFO | Bot shutting down (KeyboardInterrupt)...
-2026-03-28 19:05:52,201 - INFO - INFO | MT5 connection closed gracefully.
+2026-03-29 14:29:22,627 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0 USD
+2026-03-29 14:29:22,627 - INFO - INFO | Bot started. Monitoring symbols: ['BTCUSD', 'ETHUSD', 'EURUSD', 'XAUUSD', 'GBPUSD']
+2026-03-29 14:29:22,627 - INFO - INFO | Strategy: EMA Crossover (9/21) on timeframe 15
+2026-03-29 14:29:22,627 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:29:22,627 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:29:22,663 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:29:22,677 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:29:22,692 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:30:22,693 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:30:22,693 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:30:22,704 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:30:22,706 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:30:22,708 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:31:22,709 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:31:22,709 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:31:22,712 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:31:22,713 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:31:22,715 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:32:22,717 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:32:22,717 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:32:22,719 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:32:22,722 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:32:22,723 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:33:22,724 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:33:22,724 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:33:22,727 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:33:22,729 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:33:22,731 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:34:22,732 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:34:22,732 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:34:22,735 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:34:22,736 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:34:22,739 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:35:22,740 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:35:22,740 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:35:22,742 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:35:22,744 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:35:22,747 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:36:22,748 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:36:22,749 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:36:22,751 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:36:22,752 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:36:22,755 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:37:22,756 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:37:22,756 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-03-29 14:37:22,759 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-03-29 14:37:22,761 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-03-29 14:37:22,763 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-03-29 14:38:22,765 - ERROR - ERROR | Failed to get positions for BTCUSD: (-10001, 'IPC send failed')
+2026-03-29 14:38:22,765 - ERROR - ERROR | Failed to get positions for ETHUSD: (-10001, 'IPC send failed')
+2026-03-29 14:38:22,765 - ERROR - ERROR | Failed to get positions for EURUSD: (-10001, 'IPC send failed')
+2026-03-29 14:38:22,765 - ERROR - ERROR | Failed to get positions for XAUUSD: (-10001, 'IPC send failed')
+2026-03-29 14:38:22,765 - ERROR - ERROR | Failed to get positions for GBPUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:22,766 - ERROR - ERROR | Failed to get positions for BTCUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:22,766 - ERROR - ERROR | Failed to get positions for ETHUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:22,766 - ERROR - ERROR | Failed to get positions for EURUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:22,766 - ERROR - ERROR | Failed to get positions for XAUUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:22,766 - ERROR - ERROR | Failed to get positions for GBPUSD: (-10001, 'IPC send failed')
+2026-03-29 14:39:24,779 - INFO - INFO | Bot shutting down (KeyboardInterrupt)...
+2026-03-29 14:39:24,779 - INFO - INFO | MT5 connection closed gracefully.
+2026-04-01 21:11:57,283 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0 USD
+2026-04-01 21:11:57,283 - INFO - INFO | Bot started. Monitoring symbols: ['BTCUSD', 'ETHUSD', 'EURUSD', 'XAUUSD', 'GBPUSD']
+2026-04-01 21:11:57,284 - INFO - INFO | Strategy: EMA Crossover (9/21) on timeframe 15
+2026-04-01 21:11:57,284 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:11:57,284 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:11:57,340 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.15129, EMA21: 1.15151)
+2026-04-01 21:11:57,347 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4506.44993, EMA21: 4502.77013)
+2026-04-01 21:11:57,361 - INFO - INFO | STATUS | GBPUSD | EMA9 is BELOW EMA21 (EMA9: 1.32681, EMA21: 1.32745)
+2026-04-01 21:12:57,362 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:12:57,362 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:12:57,379 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.16038, EMA21: 1.16060)
+2026-04-01 21:12:57,394 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4777.44537, EMA21: 4767.94583)
+2026-04-01 21:12:57,410 - INFO - INFO | STATUS | GBPUSD | EMA9 is ABOVE EMA21 (EMA9: 1.33221, EMA21: 1.33196)
+2026-04-01 21:13:57,411 - ERROR - ERROR | Failed to get positions for BTCUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:13:57,411 - ERROR - ERROR | Failed to get positions for ETHUSD: (-4, 'Terminal: Not found')
+2026-04-01 21:13:57,414 - INFO - INFO | STATUS | EURUSD | EMA9 is BELOW EMA21 (EMA9: 1.16037, EMA21: 1.16060)
+2026-04-01 21:13:57,416 - INFO - INFO | STATUS | XAUUSD | EMA9 is ABOVE EMA21 (EMA9: 4777.14137, EMA21: 4767.80765)
+2026-04-01 21:13:57,418 - INFO - INFO | STATUS | GBPUSD | EMA9 is ABOVE EMA21 (EMA9: 1.33217, EMA21: 1.33194)
+2026-04-01 21:14:19,534 - INFO - INFO | Bot shutting down (KeyboardInterrupt)...
+2026-04-01 21:14:19,534 - INFO - INFO | MT5 connection closed gracefully.
+2026-04-01 21:22:15,747 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-01 21:22:15,747 - INFO - INFO | Starting Telegram Listener...
+2026-04-01 21:22:15,752 - INFO - Connecting to 149.154.167.51:443/TcpFull...
+2026-04-01 21:22:17,299 - INFO - Connection to 149.154.167.51:443/TcpFull complete!
+2026-04-01 21:22:17,572 - INFO - INFO | MT5 connection closed.
+2026-04-02 09:01:34,473 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-02 09:01:34,473 - INFO - INFO | Starting Telegram Listener...
+2026-04-02 09:01:34,473 - INFO - Connecting to 149.154.167.51:443/TcpFull...
+2026-04-02 09:01:34,516 - INFO - Connection to 149.154.167.51:443/TcpFull complete!
+2026-04-02 09:01:34,826 - INFO - Phone migrated to 4
+2026-04-02 09:01:34,896 - INFO - Reconnecting to new data center 4
+2026-04-02 09:01:34,971 - INFO - Disconnecting from 149.154.167.51:443/TcpFull...
+2026-04-02 09:01:34,972 - INFO - Disconnection from 149.154.167.51:443/TcpFull complete!
+2026-04-02 09:01:34,972 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-02 09:01:36,347 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-02 09:02:02,842 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-02 09:49:18,292 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-02 09:49:18,293 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-02 09:49:18,300 - INFO - INFO | Bot stopped by user.
+2026-04-02 09:49:18,300 - INFO - INFO | MT5 connection closed.
