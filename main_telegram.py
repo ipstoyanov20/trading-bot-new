@@ -28,8 +28,10 @@ def initialize_mt5():
         return True
     return False
 
+    return False
+
 # --- Telegram Client ---
-client = TelegramClient('trading_bot_session', config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
+client = TelegramClient('trading_bot_new_session', config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
 
 @client.on(events.NewMessage(chats=config.TELEGRAM_CHANNELS if config.TELEGRAM_CHANNELS else None))
 async def my_event_handler(event):

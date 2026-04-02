@@ -18,7 +18,7 @@ DEVIATION = 20  # Slippage in points
 TELEGRAM_API_ID = 32128299        # Example: 123456
 TELEGRAM_API_HASH = "66fea73e63fe0a63b24e69bf9854358a"       # Example: "abcdef1234567890"
 TELEGRAM_PHONE = "+359886611719"          # Example: "+1234567890"
-TELEGRAM_CHANNELS = ['FORSEX']       # List of channel names or IDs to monitor
+TELEGRAM_CHANNELS = ['forsexfreegroup']       # List of channel names or IDs to monitor
 
 # EMA Crossover Strategy
 EMA_SHORT = 9

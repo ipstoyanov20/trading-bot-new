@@ -178,35 +178,27 @@ def execute_signal(signal_data):
     sl_dist = abs(price - sl)
     total_lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
     
-    # Split lots among TPs
-    num_tps = len(tps)
-    lots_per_tp = total_lots / num_tps
-    
-    # Normalize lots per TP
-    step = symbol_info.volume_step
-    lots_per_tp = max(symbol_info.volume_min, round(lots_per_tp / step) * step)
-    
-    log_info(f"EXECUTING SIGNAL | {symbol} {order_type_str} | Price: {price} | SL: {sl} | TPs: {tps} | Total Lots: {total_lots}")
+    log_info(f"EXECUTING SIGNAL | {symbol} {order_type_str} | Price: {price} | SL: {sl} | TP1: {tps[0]} | Lots: {total_lots}")
 
-    for i, tp in enumerate(tps):
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": float(lots_per_tp),
-            "type": order_type,
-            "price": price,
-            "sl": float(sl),
-            "tp": float(tp),
-            "magic": config.MAGIC_NUMBER,
-            "comment": f"Telegram Signal TP{i+1}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        
-        # In a real scenario, we might want to ensure all orders succeed or handle partial failure
-        result = mt5.order_send(request)
-        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            log_trade(symbol, f"{order_type_str} TP{i+1}", lots_per_tp, price, sl, tp, "SUCCESS")
-        else:
-            err = mt5.last_error() if not result else result.comment
-            log_trade(symbol, f"{order_type_str} TP{i+1}", lots_per_tp, price, sl, tp, f"FAILED: {err}")
+    # Only execute for the 1st Take Profit (TP1) as requested
+    tp = tps[0]
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": float(total_lots),
+        "type": order_type,
+        "price": price,
+        "sl": float(sl),
+        "tp": float(tp),
+        "magic": config.MAGIC_NUMBER,
+        "comment": "Telegram Signal TP1",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        log_trade(symbol, f"{order_type_str} TP1", total_lots, price, sl, tp, "SUCCESS")
+    else:
+        err = mt5.last_error() if not result else result.comment
+        log_trade(symbol, f"{order_type_str} TP1", total_lots, price, sl, tp, f"FAILED: {err}")

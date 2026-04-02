@@ -30,11 +30,11 @@ def parse_signal(message_text):
         return None
         
     # Extract Entry Range
-    # Matches ENTRY 4726-4716 or ENTRY: 4726 - 4716
-    entry_match = re.search(r"ENTRY\s*:?\s*([\d.]+)\s*-\s*([\d.]+)", text)
+    # Matches ENTRY 4726-4716 or ENTRY: 4726 - 4716 or 4638.8-4648.8
+    entry_match = re.search(r"ENTRY\s*:?\s*(\d+\.?\d*)\s*-\s*(\d+\.?\d*)", text)
     if not entry_match:
         # Try single entry price
-        entry_match = re.search(r"ENTRY\s*:?\s*([\d.]+)", text)
+        entry_match = re.search(r"ENTRY\s*:?\s*(\d+\.?\d*)", text)
         if not entry_match:
             return None
         e1 = float(entry_match.group(1))
