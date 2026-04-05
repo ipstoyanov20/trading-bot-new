@@ -226,3 +226,140 @@
 2026-04-02 22:54:14,128 - INFO - Connecting to 149.154.167.92:443/TcpFull...
 2026-04-02 22:54:14,178 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
 2026-04-02 22:54:18,995 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-04 20:52:01,387 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-04 20:52:01,387 - INFO - INFO | Starting Telegram Listener...
+2026-04-04 20:52:01,387 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 20:52:01,441 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:52:01,967 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-04 20:53:23,722 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:23,773 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:53:24,275 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4638.8, 4648.8), 'sl': 4652.8, 'tps': [4634.8, 4630.0, 4631.8]}
+2026-04-04 20:53:24,275 - INFO - INFO | EXECUTING SIGNAL | XAUUSD SELL | Price: 4671.97 | SL: 4652.8 | TP1: 4634.8 | Lots: 0.01
+2026-04-04 20:53:24,275 - INFO - TRADE | 2026-04-04 20:53:24 | Symbol: XAUUSD | Action: SELL TP1 | Lot: 0.01 | Price: 4671.97 | SL: 4652.8 | TP: 4634.8 | Result: FAILED: AutoTrading disabled by client
+2026-04-04 20:53:24,275 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:24,277 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:53:39,145 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:39,196 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:53:39,652 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4638.8, 4648.8), 'sl': 4652.8, 'tps': [4634.8, 4630.0, 4631.8]}
+2026-04-04 20:53:39,652 - INFO - INFO | EXECUTING SIGNAL | XAUUSD SELL | Price: 4671.97 | SL: 4652.8 | TP1: 4634.8 | Lots: 0.01
+2026-04-04 20:53:39,652 - INFO - TRADE | 2026-04-04 20:53:39 | Symbol: XAUUSD | Action: SELL TP1 | Lot: 0.01 | Price: 4671.97 | SL: 4652.8 | TP: 4634.8 | Result: FAILED: AutoTrading disabled by client
+2026-04-04 20:53:39,653 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:39,653 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:53:53,740 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:53,795 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:53:54,425 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4638.8, 4648.8), 'sl': 4652.8, 'tps': [4634.8, 4630.0, 4631.8]}
+2026-04-04 20:53:54,426 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'BUY', 'entry_range': (4716.0, 4726.0), 'sl': 4711.0, 'tps': [4730.0, 4735.0, 4733.0]}
+2026-04-04 20:53:54,426 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4560.5, 4570.5), 'sl': 4573.0, 'tps': [4556.5, 4550.0, 4553.5]}
+2026-04-04 20:53:54,427 - INFO - INFO | EXECUTING SIGNAL | XAUUSD SELL | Price: 4671.97 | SL: 4573.0 | TP1: 4556.5 | Lots: 0.01
+2026-04-04 20:53:54,427 - INFO - TRADE | 2026-04-04 20:53:54 | Symbol: XAUUSD | Action: SELL TP1 | Lot: 0.01 | Price: 4671.97 | SL: 4573.0 | TP: 4556.5 | Result: FAILED: AutoTrading disabled by client
+2026-04-04 20:53:54,427 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-04 20:53:54,427 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-04 20:54:06,438 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4638.8, 4648.8), 'sl': 4652.8, 'tps': [4634.8, 4630.0, 4631.8]}
+2026-04-04 20:54:06,438 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'BUY', 'entry_range': (4716.0, 4726.0), 'sl': 4711.0, 'tps': [4730.0, 4735.0, 4733.0]}
+2026-04-04 20:54:06,440 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4560.5, 4570.5), 'sl': 4573.0, 'tps': [4556.5, 4550.0, 4553.5]}
+2026-04-04 20:54:06,440 - INFO - INFO | EXECUTING SIGNAL | XAUUSD SELL | Price: 4671.97 | SL: 4573.0 | TP1: 4556.5 | Lots: 0.01
+2026-04-04 20:54:06,441 - INFO - TRADE | 2026-04-04 20:54:06 | Symbol: XAUUSD | Action: SELL TP1 | Lot: 0.01 | Price: 4671.97 | SL: 4573.0 | TP: 4556.5 | Result: FAILED: AutoTrading disabled by client
+2026-04-04 20:54:14,885 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4638.8, 4648.8), 'sl': 4652.8, 'tps': [4634.8, 4630.0, 4631.8]}
+2026-04-04 20:54:14,885 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'BUY', 'entry_range': (4716.0, 4726.0), 'sl': 4711.0, 'tps': [4730.0, 4735.0, 4733.0]}
+2026-04-04 20:54:14,885 - INFO - INFO | SIGNAL PARSED | {'symbol': 'XAUUSD', 'type': 'SELL', 'entry_range': (4560.5, 4570.5), 'sl': 4573.0, 'tps': [4556.5, 4550.0, 4553.5]}
+2026-04-04 20:54:14,886 - INFO - INFO | EXECUTING SIGNAL | XAUUSD SELL | Price: 4671.97 | SL: 4573.0 | TP1: 4556.5 | Lots: 0.01
+2026-04-04 20:54:14,886 - INFO - TRADE | 2026-04-04 20:54:14 | Symbol: XAUUSD | Action: SELL TP1 | Lot: 0.01 | Price: 4671.97 | SL: 4573.0 | TP: 4556.5 | Result: FAILED: AutoTrading disabled by client
+2026-04-04 21:24:56,076 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-04 21:24:56,076 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-04 21:24:56,082 - INFO - INFO | Bot stopped by user.
+2026-04-04 21:24:56,082 - INFO - INFO | MT5 connection closed.
+2026-04-04 21:24:57,826 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-04 21:24:57,826 - INFO - INFO | Starting Telegram Listener...
+2026-04-04 21:24:57,826 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:24:57,879 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 21:24:58,390 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-04 21:26:02,636 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-04 21:26:02,636 - INFO - INFO | Starting Telegram Listener...
+2026-04-04 21:26:02,636 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:26:02,698 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 21:26:03,170 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-04 21:26:44,848 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-04 21:26:44,849 - INFO - INFO | Starting Telegram Listener...
+2026-04-04 21:26:44,849 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:26:44,929 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 21:26:50,420 - INFO - INFO | MT5 connection closed.
+2026-04-04 21:27:01,700 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-04 21:27:01,702 - INFO - INFO | Starting Telegram Listener...
+2026-04-04 21:27:01,702 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:27:01,750 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 21:27:02,490 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-04 21:27:02,490 - INFO - INFO | No active positions found on startup.
+2026-04-04 21:45:13,329 - WARNING - Server closed the connection: [WinError 1236] The network connection was aborted by the local system
+2026-04-04 21:45:13,356 - INFO - Connection closed while receiving data: [WinError 1236] The network connection was aborted by the local system
+2026-04-04 21:45:13,370 - INFO - Closing current connection to begin reconnect...
+2026-04-04 21:45:13,375 - INFO - <class 'ConnectionAbortedError'> during disconnect: [WinError 1236] The network connection was aborted by the local system
+2026-04-04 21:45:13,376 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:45:13,385 - WARNING - Attempt 1 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:14,405 - WARNING - Attempt 2 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:15,413 - WARNING - Attempt 3 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:16,424 - WARNING - Attempt 4 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:17,430 - WARNING - Attempt 5 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:18,437 - WARNING - Attempt 6 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-04-04 21:45:19,437 - INFO - Failed reconnection attempt 1 with ConnectionError
+2026-04-04 21:45:20,446 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-04 21:45:20,497 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-04 22:12:02,741 - INFO - Got difference for channel 1651583302 updates
+2026-04-05 10:34:02,890 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:34:02,891 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:34:02,891 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:34:02,960 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:34:03,338 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-05 10:34:03,340 - INFO - INFO | No active positions found on startup.
+2026-04-05 10:36:06,506 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-05 10:36:06,507 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:36:06,510 - INFO - INFO | Bot stopped by user.
+2026-04-05 10:36:06,510 - INFO - INFO | MT5 connection closed.
+2026-04-05 10:36:08,059 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:36:08,060 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:36:08,060 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:36:08,106 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:36:08,803 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-05 10:36:08,804 - INFO - INFO | No active positions found on startup.
+2026-04-05 10:36:08,880 - INFO - INFO | Logged the 3rd most recent message from the channel.
+2026-04-05 10:39:19,621 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:39:19,621 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:39:19,622 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:39:19,673 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:39:20,087 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-05 10:39:20,087 - INFO - INFO | No active positions found on startup.
+2026-04-05 10:39:20,161 - INFO - INFO | Logged the 3rd most recent message from the channel.
+2026-04-05 10:39:36,246 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-05 10:39:36,246 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:39:41,764 - INFO - INFO | Bot stopped by user.
+2026-04-05 10:39:41,764 - INFO - INFO | MT5 connection closed.
+2026-04-05 10:39:52,234 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:39:52,234 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:39:52,234 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:39:52,287 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:39:57,762 - INFO - INFO | MT5 connection closed.
+2026-04-05 10:40:29,071 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-05 10:40:29,071 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:40:29,079 - INFO - INFO | Bot stopped by user.
+2026-04-05 10:40:29,079 - INFO - INFO | MT5 connection closed.
+2026-04-05 10:44:05,982 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:44:05,983 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:44:05,983 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:44:06,040 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:44:06,699 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-05 10:44:06,700 - INFO - INFO | No active positions found on startup.
+2026-04-05 10:44:06,778 - INFO - INFO | Logged the 3rd most recent message from the channel.
+2026-04-05 10:44:30,771 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-05 10:44:30,771 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:44:30,776 - INFO - INFO | Bot stopped by user.
+2026-04-05 10:44:30,776 - INFO - INFO | MT5 connection closed.
+2026-04-05 10:45:24,850 - INFO - INFO | MT5 Connected. Account: 5048588656, Balance: 20.0
+2026-04-05 10:45:24,850 - INFO - INFO | Starting Telegram Listener...
+2026-04-05 10:45:24,850 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-04-05 10:45:24,896 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:45:25,238 - INFO - INFO | Telegram Client Started and Authenticated.
+2026-04-05 10:45:25,238 - INFO - INFO | No active positions found on startup.
+2026-04-05 10:45:25,238 - INFO - INFO | Monitoring for new signals 24/7...
+2026-04-05 10:49:57,304 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-04-05 10:49:57,304 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-04-05 10:49:57,309 - INFO - INFO | Bot stopped by user via keyboard.
+2026-04-05 10:49:57,309 - INFO - INFO | MT5 connection closed.
