@@ -4,8 +4,8 @@ import MetaTrader5 as mt5
 from alpaca_trade_api.rest import REST, TimeFrame
 
 # --- CONFIGURATION CHOOSE YOUR KEYS ---
-ALPACA_API_KEY = "YOUR_ALPACA_API_KEY"
-ALPACA_SECRET_KEY = "YOUR_ALPACA_SECRET_KEY"
+ALPACA_API_KEY = "PKKFQ3P4Q4B5RFDFDPFDMCF47P"
+ALPACA_SECRET_KEY = "C2Snty78mS9yor8wmzARSKocibFLjG9R9Bkeq28N34M4"
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets" # Use paper-api for testing
 
 ALPACA_SYMBOL = "GLD"  # Gold ETF proxy on US Stock Market for Alpaca
@@ -26,18 +26,20 @@ def init_alpaca():
     return api
 
 def init_mt5():
-    print("Initializing MT5 connection...")
+    print("Connecting to MetaTrader 5...")
     if not mt5.initialize():
         print("MT5 initialization failed. Error code:", mt5.last_error())
-        quit()
-    print("MT5 initialized successfully.")
+        return False
     
     # Check if symbol is available in market watch
     selected = mt5.symbol_select(MT5_SYMBOL, True)
     if not selected:
         print(f"Failed to select {MT5_SYMBOL} in MT5. Please check MT5 symbol nomenclature.")
         mt5.shutdown()
-        quit()
+        return False
+    
+    print("MT5 connected and symbol selected.")
+    return True
 
 # --- STRATEGY LOGIC ---
 def get_data_and_signal(api):
@@ -50,7 +52,12 @@ def get_data_and_signal(api):
         return None
     
     if bars.empty:
-        print("No market data received from Alpaca.")
+        # Check if the market is actually open
+        clock = api.get_clock()
+        if not clock.is_open:
+            print(f"Market is currently closed (Sunday/Weekend/After-hours). Re-opening at {clock.next_open}.")
+        else:
+            print("No market data received from Alpaca (Market is open but no new bars).")
         return None
 
     # Calculate Simple Moving Averages (SMAs)
@@ -77,51 +84,64 @@ def get_data_and_signal(api):
 
 # --- MT5 EXECUTION ---
 def execute_trade_mt5(signal):
-    tick = mt5.symbol_info_tick(MT5_SYMBOL)
-    if tick is None:
-        print(f"Could not retrieve ticks for {MT5_SYMBOL} from MT5.")
+    # Initialize MT5 only when signal is found
+    if not init_mt5():
+        print("Could not execute trade: MT5 connection failed.")
         return
 
-    if signal == "BUY":
-        order_type = mt5.ORDER_TYPE_BUY
-        price = tick.ask
-    elif signal == "SELL":
-        order_type = mt5.ORDER_TYPE_SELL
-        price = tick.bid
-    else:
-        return
+    try:
+        tick = mt5.symbol_info_tick(MT5_SYMBOL)
+        if tick is None:
+            print(f"Could not retrieve ticks for {MT5_SYMBOL} from MT5.")
+            return
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": MT5_SYMBOL,
-        "volume": LOT_SIZE,
-        "type": order_type,
-        "price": price,
-        "deviation": 20,
-        "magic": 123456,
-        "comment": "Alpaca GLD SMA Crossover",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
+        if signal == "BUY":
+            order_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+        elif signal == "SELL":
+            order_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            return
 
-    print(f"Sending {signal} order to MT5 for {MT5_SYMBOL} at price {price}...")
-    result = mt5.order_send(request)
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": MT5_SYMBOL,
+            "volume": LOT_SIZE,
+            "type": order_type,
+            "price": price,
+            "deviation": 20,
+            "magic": 123456,
+            "comment": "Alpaca GLD SMA Crossover",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        print(f"Sending {signal} order to MT5 for {MT5_SYMBOL} at price {price}...")
+        result = mt5.order_send(request)
+        
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"Order failed, retcode={result.retcode}")
+            result_dict = result._asdict()
+            for field in result_dict.keys():
+                print("   {}={}".format(field, result_dict[field]))
+        else:
+            print(f"Order successfully placed! MT5 Ticket: {result.order}")
     
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"Order failed, retcode={result.retcode}")
-        # print detailed error
-        result_dict = result._asdict()
-        for field in result_dict.keys():
-            print("   {}={}".format(field, result_dict[field]))
-    else:
-        print(f"Order successfully placed! MT5 Ticket: {result.order}")
+    finally:
+        # Shutdown MT5 immediately after execution attempt
+        mt5.shutdown()
+        print("MT5 connection closed after trade execution.")
 
 # --- MAIN EXPERT ADVISOR LOOP ---
 def run_bot():
     api = init_alpaca()
-    init_mt5()
+    # MT5 is no longer initialized here; it's initialized on-demand when a signal is generated.
     
-    print("Bot is running... Starting to monitor for signals. Press Ctrl+C to stop.")
+    print(f"Bot is running...")
+    print(f"Monitoring Alpaca for: {ALPACA_SYMBOL}")
+    print(f"Executing on MT5 for: {MT5_SYMBOL}")
+    print("Press Ctrl+C to stop.")
     try:
         while True:
             signal = get_data_and_signal(api)
@@ -131,7 +151,9 @@ def run_bot():
                 print(f"[{current_time}] SIGNAL GENERATED: {signal}")
                 execute_trade_mt5(signal)
             else:
-                print(f"[{current_time}] No new crossover signal detected.")
+                # Optional: We already handle the closed market message inside get_data_and_signal
+                # but we can suppress this specific line if we want it to be cleaner
+                pass
                 
             time.sleep(60) # Wait 60 seconds (1 minute timeframe) before checking again
     except KeyboardInterrupt:
@@ -139,8 +161,9 @@ def run_bot():
     except Exception as e:
         print(f"Unexpected error occurred: {e}")
     finally:
+        # Final safety shutdown in case something weird happens
         mt5.shutdown()
-        print("MT5 Connection closed.")
+        print("Bot loop terminated.")
 
 if __name__ == "__main__":
     run_bot()
