@@ -94,7 +94,7 @@ class RevolutXBot:
         self.revx_symbol = "BTC-USD"
         self.mt5_symbol = self.symbol_map.get(self.revx_symbol, self.revx_symbol)
         
-        self.interval = 15 
+        self.interval = 5 
         self.fast_ma = 9
         self.slow_ma = 21
         self.lot_size = 0.1 
@@ -154,20 +154,25 @@ class RevolutXBot:
 
     def generate_signal(self, df):
         """Generates signals and prints current status."""
-        if df is None or len(df) < self.slow_ma + 1: return None
+        if df is None or len(df) < self.slow_ma + 1: return None, None
         df['ema_fast'] = df['close'].ewm(span=self.fast_ma, adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=self.slow_ma, adjust=False).mean()
         prev_row = df.iloc[-2]; curr_row = df.iloc[-1]
         last_price = curr_row['close']
         fast_val = round(curr_row['ema_fast'], 2); slow_val = round(curr_row['ema_slow'], 2)
-        print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] {self.revx_symbol}: ${last_price:,.2f} | EMA{self.fast_ma}: {fast_val} | EMA{self.slow_ma}: {slow_val}", end=" | ")
-
+        
+        status = "Monitoring..."
+        signal_found = None
+        
         if prev_row['ema_fast'] <= prev_row['ema_slow'] and curr_row['ema_fast'] > curr_row['ema_slow']:
-            print("Status: 🚀 SIGNAL! (BUY)"); return "BUY", last_price
+            status = "🚀 SIGNAL! (BUY)"
+            signal_found = "BUY"
         elif prev_row['ema_fast'] >= prev_row['ema_slow'] and curr_row['ema_fast'] < curr_row['ema_slow']:
-            print("Status: 🔻 SIGNAL! (SELL)"); return "SELL", last_price
+            status = "🔻 SIGNAL! (SELL)"
+            signal_found = "SELL"
 
-        print("Status: Monitoring..."); return None, last_price
+        print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] {self.revx_symbol}: ${last_price:,.2f} | EMA9: {fast_val} | EMA21: {slow_val} | {status}")
+        return signal_found, last_price
 
     def execute_trade_mt5(self, signal):
         """Executes the trade on MetaTrader 5."""
@@ -192,18 +197,35 @@ class RevolutXBot:
         
         try:
             await self.tg_client.start(phone=config.TELEGRAM_PHONE)
-            
             channel_target = config.TELEGRAM_CHANNELS[0] if config.TELEGRAM_CHANNELS else 'me'
             
             # Send startup confirmation
-            await self.tg_client.send_message(channel_target, f"🤖 **Revolut X Bot Started**\nMonitoring `{self.revx_symbol}` on `{self.interval}m` timeframe.")
+            startup_msg = f"🤖 **Revolut X Bot Active**\nPair: `{self.revx_symbol}`\nTimeframe: `{self.interval}m`\nStrategy: EMA {self.fast_ma}/{self.slow_ma}"
+            await self.tg_client.send_message(channel_target, startup_msg)
             print(f"Startup message sent to {channel_target}")
-            print(f"Monitoring {self.revx_symbol}...")
+
+            last_status_time = 0
 
             while True:
                 df = self.fetch_candles()
                 if df is not None:
                     signal, price = self.generate_signal(df)
+                    
+                    # Send periodic status update to Telegram (every 5 mins)
+                    current_time = time.time()
+                    if current_time - last_status_time > 300: # 5 minutes
+                        ema9 = round(df['ema_fast'].iloc[-1], 2)
+                        ema21 = round(df['ema_slow'].iloc[-1], 2)
+                        status_msg = (
+                            f"📊 **Periodic Status Update**\n"
+                            f"Price: `${price:,.2f}`\n"
+                            f"EMA9: `{ema9}` | EMA21: `{ema21}`\n"
+                            f"Status: Waiting for crossover..."
+                        )
+                        await self.tg_client.send_message(channel_target, status_msg)
+                        last_status_time = current_time
+                        print(f"Periodic status sent to Telegram.")
+
                     if signal:
                         await self.send_telegram_signal(signal, price)
                         self.execute_trade_mt5(signal)
