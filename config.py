@@ -20,7 +20,7 @@ TELEGRAM_API_HASH = "66fea73e63fe0a63b24e69bf9854358a"
 TELEGRAM_PHONE = "+359886611719"
 
 # Channels the bot will monitor for trading signals (Username or numeric ID)
-TELEGRAM_CHANNELS = ['forsexfreegroup']
+TELEGRAM_CHANNELS = [-1003857703703]
 
 # --- EMA Crossover Strategy Settings ---
 EMA_SHORT = 9
@@ -43,6 +43,12 @@ FIXED_TP_POINTS = 1000  # 10.00 points for XAUUSD
 ATR_PERIOD = 14         # Period for the ATR indicator calculation
 ATR_SL_MULT = 2.0       # Multiplier for the SL distance (e.g., SL = entry - 2*ATR)
 ATR_TP_MULT = 4.0       # Multiplier for the TP distance (e.g., TP = entry + 4*ATR)
+
+# --- Revolut X (Crypto Exchange) Configuration ---
+# Generate these in the Revolut X web interface
+REVX_API_KEY = "xXHbY5r2S5Shza7wZl4oxpLM7oSmB5E6N13Sc7CNf0zOm1VUPIi5ECnP5TNigQt1"
+REVX_PRIVATE_KEY_PATH = "C:/Users/Gamer/Desktop/tradingbot/revolut_private.pem" # Path to your Ed25519 private key file
+REVX_BASE_URL = "https://revx.revolut.com"
 
 # --- General Scheduler ---
 # Interval at which the bot checks for new candles/data (if running a background loop)
