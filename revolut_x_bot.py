@@ -132,7 +132,10 @@ class RevolutXBot:
 
     def fetch_candles(self):
         """Fetches historical candles from Revolut X."""
-        if not self.auth: return None
+        if not self.auth: 
+            print("Fetch Error: No Auth")
+            return None
+            
         path = f"/api/1.0/candles/{self.revx_symbol}"
         query_string = f"interval={self.interval}"
         url = f"{self.base_url}{path}?{query_string}"
@@ -141,15 +144,32 @@ class RevolutXBot:
             headers = self.auth.get_headers("GET", path, query_string=query_string)
             response = requests.get(url, headers=headers)
             if response.status_code == 200:
-                data = response.json()
-                if not data: return None
-                df = pd.DataFrame(data)
+                json_data = response.json()
+                
+                # Handle nested 'data' key if it exists
+                if isinstance(json_data, dict) and 'data' in json_data:
+                    candles = json_data['data']
+                else:
+                    candles = json_data
+                    
+                if not candles: 
+                    print(f"Fetch Warning: No data returned from {url}")
+                    return None
+                    
+                df = pd.DataFrame(candles)
                 if 'start' in df.columns: df.rename(columns={'start': 'timestamp'}, inplace=True)
+                
                 if 'close' in df.columns:
                     df['close'] = pd.to_numeric(df['close'])
                     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     return df
-        except Exception: pass
+                else:
+                    print(f"Fetch Error: Missing 'close' column. Columns: {df.columns}")
+            else:
+                print(f"Fetch Error: {response.status_code} - {response.text}")
+        except Exception as e: 
+            print(f"Fetch Exception: {e}")
+            
         return None
 
     def generate_signal(self, df):
@@ -199,38 +219,46 @@ class RevolutXBot:
             await self.tg_client.start(phone=config.TELEGRAM_PHONE)
             channel_target = config.TELEGRAM_CHANNELS[0] if config.TELEGRAM_CHANNELS else 'me'
             
-            # Send startup confirmation
             startup_msg = f"🤖 **Revolut X Bot Active**\nPair: `{self.revx_symbol}`\nTimeframe: `{self.interval}m`\nStrategy: EMA {self.fast_ma}/{self.slow_ma}"
             await self.tg_client.send_message(channel_target, startup_msg)
-            print(f"Startup message sent to {channel_target}")
+            print(f"Bot started. Monitoring {self.revx_symbol}...")
 
             last_status_time = 0
+            last_sent_price = 0
 
             while True:
                 df = self.fetch_candles()
                 if df is not None:
+                    # Calculate EMAs for the latest row
+                    df['ema_fast'] = df['close'].ewm(span=self.fast_ma, adjust=False).mean()
+                    df['ema_slow'] = df['close'].ewm(span=self.slow_ma, adjust=False).mean()
+                    
                     signal, price = self.generate_signal(df)
                     
-                    # Send periodic status update to Telegram (every 5 mins)
-                    current_time = time.time()
-                    if current_time - last_status_time > 300: # 5 minutes
+                    # Send periodic status update to Telegram (only if price changed)
+                    if price != last_sent_price: 
                         ema9 = round(df['ema_fast'].iloc[-1], 2)
                         ema21 = round(df['ema_slow'].iloc[-1], 2)
+                        diff = round(ema9 - ema21, 2)
+                        
                         status_msg = (
-                            f"📊 **Periodic Status Update**\n"
-                            f"Price: `${price:,.2f}`\n"
+                            f"💰 **BTC-USD Update**\n"
+                            f"Price: **${price:,.2f}**\n"
                             f"EMA9: `{ema9}` | EMA21: `{ema21}`\n"
-                            f"Status: Waiting for crossover..."
+                            f"Gap: `{diff}` " + ("📈" if diff > 0 else "📉")
                         )
+                        
+                        if signal:
+                            status_msg += f"\n\n🚨 **{signal} SIGNAL DETECTED!** 🚀"
+                        
                         await self.tg_client.send_message(channel_target, status_msg)
-                        last_status_time = current_time
-                        print(f"Periodic status sent to Telegram.")
+                        last_sent_price = price
+                        print(f"Telegram updated: ${price:,.2f} (Gap: {diff})")
 
                     if signal:
-                        await self.send_telegram_signal(signal, price)
                         self.execute_trade_mt5(signal)
                 
-                await asyncio.sleep(60) 
+                await asyncio.sleep(10) 
         except KeyboardInterrupt: print("Bot stopped.")
         except Exception as e: print(f"Critical error: {e}")
 
