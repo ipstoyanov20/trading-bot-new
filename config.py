@@ -18,6 +18,7 @@ DEVIATION = 20                 # Max slippage allowed in points (1 point = 0.01 
 TELEGRAM_API_ID = 32128299        
 TELEGRAM_API_HASH = "66fea73e63fe0a63b24e69bf9854358a"
 TELEGRAM_PHONE = "+359886611719"
+TELEGRAM_BOT_TOKEN = "8748248083:AAGva0e9L0TL1HHsKXwIk_2Fte5M2pocmmQ" # Get this from @BotFather on Telegram
 
 # Channels the bot will monitor for trading signals (Username or numeric ID)
 TELEGRAM_CHANNELS = [-1003857703703]

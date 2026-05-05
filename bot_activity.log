@@ -363,3 +363,618 @@
 2026-04-05 10:49:57,304 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
 2026-04-05 10:49:57,309 - INFO - INFO | Bot stopped by user via keyboard.
 2026-04-05 10:49:57,309 - INFO - INFO | MT5 connection closed.
+2026-05-03 16:45:56,618 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 16:45:56,669 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-03 16:45:58,655 - INFO - INFO | Periodic Telegram heartbeat sent: $78,609.82
+2026-05-03 16:47:51,142 - INFO - Connecting to 149.154.167.51:443/TcpFull...
+2026-05-03 16:47:52,720 - INFO - Connection to 149.154.167.51:443/TcpFull complete!
+2026-05-03 16:47:53,058 - INFO - Phone migrated to 4
+2026-05-03 16:47:53,058 - INFO - Reconnecting to new data center 4
+2026-05-03 16:47:53,118 - INFO - Disconnecting from 149.154.167.51:443/TcpFull...
+2026-05-03 16:47:53,118 - INFO - Disconnection from 149.154.167.51:443/TcpFull complete!
+2026-05-03 16:47:53,119 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 16:47:54,271 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-03 16:47:56,164 - INFO - INFO | Periodic Telegram heartbeat sent: $78,691.01
+2026-05-03 16:53:00,058 - INFO - INFO | Periodic Telegram heartbeat sent: $78,637.59
+2026-05-03 16:58:05,941 - INFO - INFO | Periodic Telegram heartbeat sent: $78,675.21
+2026-05-03 17:02:49,503 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:02:51,438 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:02:54,770 - INFO - Got difference for account updates
+2026-05-03 17:03:02,832 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:03:02,838 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:03:14,091 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:03:14,097 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:03:25,776 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:03:25,782 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:03:37,262 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:03:37,268 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:03:48,707 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:03:48,712 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:04:00,463 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:04:00,468 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:04:12,672 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:04:12,678 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:04:24,052 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:04:24,057 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:05:09,726 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:05:09,732 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:05:21,171 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:05:21,177 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:05:32,640 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:05:32,644 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:05:43,965 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:05:43,970 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:05:55,500 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:05:55,506 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:06:06,934 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:06:06,941 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:06:18,369 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:06:18,374 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:06:29,680 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:06:29,686 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:06:40,997 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:06:41,001 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:06:52,402 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:06:52,409 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:07:03,804 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:07:03,810 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:07:15,281 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:07:15,286 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:07:27,455 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:07:27,461 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:07:38,842 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:07:38,847 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:07:50,452 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:07:50,459 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:08:02,304 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:08:02,309 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:08:15,102 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:08:15,107 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:08:26,309 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:08:26,315 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:08:37,678 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:08:37,683 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:08:49,168 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:08:49,174 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:00,465 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:00,471 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:11,943 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:11,949 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:23,416 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:23,422 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:34,735 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:34,741 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:46,203 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:46,208 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:09:57,665 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:09:57,671 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:15:01,413 - INFO - INFO | Periodic Telegram heartbeat sent: $78,712.06
+2026-05-03 17:17:54,857 - INFO - Got difference for account updates
+2026-05-03 17:20:03,814 - INFO - INFO | Periodic Telegram heartbeat sent: $78,676.23
+2026-05-03 17:21:11,147 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:21:13,066 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:21:24,381 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:21:26,300 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:21:37,580 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:21:39,507 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:21:50,853 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:21:52,778 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:22:04,082 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:22:04,089 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:22:15,425 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:22:15,431 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:22:26,665 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:22:26,670 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:22:37,828 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:22:37,833 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:22:49,165 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:22:49,170 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:00,438 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:00,444 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:11,715 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:11,720 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:23,030 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:23,034 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:34,523 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:34,528 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:45,723 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:45,728 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:23:57,044 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:23:57,051 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:24:08,435 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:24:08,442 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:24:20,266 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:24:20,272 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:24:31,442 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:24:31,448 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:24:42,815 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:24:42,821 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:24:54,472 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:24:54,479 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:29:56,616 - INFO - INFO | Periodic Telegram heartbeat sent: $78,692.36
+2026-05-03 17:30:08,055 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:30:08,061 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:30:19,822 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:30:19,829 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:32:54,934 - INFO - Got difference for account updates
+2026-05-03 17:33:07,700 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:33:07,706 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:33:18,965 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:33:18,971 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:33:30,220 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:33:30,226 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:33:41,668 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:33:41,673 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:33:53,586 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:33:53,592 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:34:04,830 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:34:04,836 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:34:16,065 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:34:16,070 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:34:27,281 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:34:27,287 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:34:38,662 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:34:38,669 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:34:49,952 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:34:49,957 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:39:51,094 - INFO - INFO | Periodic Telegram heartbeat sent: $78,683.36
+2026-05-03 17:44:54,676 - INFO - INFO | Periodic Telegram heartbeat sent: $78,712.58
+2026-05-03 17:47:55,361 - INFO - Got difference for account updates
+2026-05-03 17:49:24,735 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:49:24,741 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:49:36,024 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:49:36,030 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:49:58,791 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:49:58,797 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:50:10,772 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:50:10,779 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:50:22,155 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:50:22,162 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:50:33,458 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:50:33,465 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:50:44,765 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:50:44,772 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:50:56,096 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:50:56,102 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:51:07,431 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 17:51:07,436 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 17:56:10,108 - INFO - INFO | Periodic Telegram heartbeat sent: $78,763.84
+2026-05-03 18:01:11,393 - INFO - INFO | Periodic Telegram heartbeat sent: $78,773.21
+2026-05-03 18:02:55,465 - INFO - Got difference for account updates
+2026-05-03 18:06:13,659 - INFO - INFO | Periodic Telegram heartbeat sent: $78,800.00
+2026-05-03 18:11:16,778 - INFO - INFO | Periodic Telegram heartbeat sent: $78,728.85
+2026-05-03 18:16:18,562 - INFO - INFO | Periodic Telegram heartbeat sent: $78,749.89
+2026-05-03 18:17:55,556 - INFO - Got difference for account updates
+2026-05-03 18:21:20,327 - INFO - INFO | Periodic Telegram heartbeat sent: $78,729.52
+2026-05-03 18:26:23,081 - INFO - INFO | Periodic Telegram heartbeat sent: $78,735.46
+2026-05-03 18:31:27,061 - INFO - INFO | Periodic Telegram heartbeat sent: $78,757.56
+2026-05-03 18:32:56,849 - INFO - Got difference for account updates
+2026-05-03 18:33:59,899 - WARNING - Server closed the connection: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 18:33:59,910 - INFO - Connection closed while receiving data: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 18:33:59,914 - INFO - Closing current connection to begin reconnect...
+2026-05-03 18:33:59,917 - INFO - <class 'ConnectionAbortedError'> during disconnect: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 18:33:59,918 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 18:33:59,921 - WARNING - Attempt 1 at connecting failed: OSError: [WinError 1232] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:00,930 - WARNING - Attempt 2 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:01,937 - WARNING - Attempt 3 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:02,944 - WARNING - Attempt 4 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:03,957 - WARNING - Attempt 5 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:04,965 - WARNING - Attempt 6 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 18:34:05,971 - INFO - Failed reconnection attempt 1 with ConnectionError
+2026-05-03 18:34:06,981 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 18:34:07,030 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-03 18:36:27,327 - INFO - INFO | Periodic Telegram heartbeat sent: $78,709.62
+2026-05-03 18:41:29,126 - INFO - INFO | Periodic Telegram heartbeat sent: $78,695.38
+2026-05-03 18:45:01,879 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:01,884 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:45:13,156 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:13,162 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:45:24,344 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:24,350 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:45:35,542 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:35,548 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:45:46,750 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:46,756 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:45:58,022 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:45:58,029 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:46:09,261 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:46:09,266 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:46:20,568 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:46:20,574 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:46:31,892 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:46:31,898 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:46:43,233 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:46:43,238 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:46:54,624 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:46:54,630 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:05,976 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:47:05,982 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:17,257 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:47:17,263 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:28,391 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:47:28,397 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:39,662 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:47:39,668 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:50,972 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:47:50,977 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:47:56,911 - INFO - Got difference for account updates
+2026-05-03 18:48:02,197 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:02,202 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:48:13,357 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:13,364 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:48:24,551 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:24,556 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:48:35,831 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:35,838 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:48:47,110 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:47,115 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:48:58,342 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:48:58,348 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:49:09,547 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:49:09,552 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:49:20,911 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:49:20,916 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:49:32,194 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:49:32,201 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:49:43,422 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:49:43,429 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:49:54,737 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 18:49:54,744 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 18:54:57,276 - INFO - INFO | Periodic Telegram heartbeat sent: $78,654.18
+2026-05-03 18:59:59,078 - INFO - INFO | Periodic Telegram heartbeat sent: $78,661.06
+2026-05-03 19:02:57,008 - INFO - Got difference for account updates
+2026-05-03 19:05:03,290 - INFO - INFO | Periodic Telegram heartbeat sent: $78,682.37
+2026-05-03 19:10:06,073 - INFO - INFO | Periodic Telegram heartbeat sent: $78,626.55
+2026-05-03 19:15:10,530 - INFO - INFO | Periodic Telegram heartbeat sent: $78,605.00
+2026-05-03 19:17:57,132 - INFO - Got difference for account updates
+2026-05-03 19:20:15,257 - INFO - INFO | Periodic Telegram heartbeat sent: $78,610.45
+2026-05-03 19:25:20,339 - INFO - INFO | Periodic Telegram heartbeat sent: $78,647.71
+2026-05-03 19:30:28,776 - INFO - INFO | Periodic Telegram heartbeat sent: $78,656.89
+2026-05-03 19:32:57,199 - INFO - Got difference for account updates
+2026-05-03 19:35:35,040 - INFO - INFO | Periodic Telegram heartbeat sent: $78,750.41
+2026-05-03 19:40:39,394 - INFO - INFO | Periodic Telegram heartbeat sent: $78,718.35
+2026-05-03 19:45:03,044 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:03,050 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:45:14,628 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:14,633 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:45:25,855 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:25,862 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:45:37,189 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:37,194 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:45:48,419 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:48,424 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:45:59,664 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:45:59,668 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:46:10,878 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:46:10,884 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:46:22,082 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:46:22,089 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:46:33,326 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:46:33,331 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:46:44,685 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:46:44,690 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:46:55,892 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:46:55,898 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:07,351 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:47:07,357 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:19,028 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:47:19,033 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:30,324 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:47:30,330 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:41,660 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:47:41,666 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:52,948 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:47:52,952 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:47:57,287 - INFO - Got difference for account updates
+2026-05-03 19:48:04,306 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:48:04,312 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:48:15,564 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:48:15,569 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:48:26,804 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:48:26,809 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:48:38,120 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:48:38,126 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:48:49,445 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:48:49,450 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:00,726 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:00,733 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:12,050 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:12,056 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:23,397 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:23,402 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:34,814 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:34,819 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:46,272 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:46,278 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:49:57,544 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:49:57,550 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:54:59,912 - INFO - INFO | Periodic Telegram heartbeat sent: $78,702.87
+2026-05-03 19:59:17,632 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:59:17,638 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:59:28,838 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:59:28,846 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 19:59:40,051 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 19:59:40,056 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:00:02,733 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:00:02,737 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:00:14,220 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:00:14,226 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:00:26,035 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:00:26,042 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:00:37,742 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:00:37,748 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:00:49,007 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:00:49,012 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:00,351 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:00,357 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:11,738 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:11,743 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:23,077 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:23,082 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:34,341 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:34,347 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:45,720 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:45,726 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:01:56,923 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:01:56,928 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:08,148 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:02:08,155 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:19,451 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:02:19,457 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:30,737 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:02:30,743 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:41,979 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:02:41,985 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:53,195 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:02:53,200 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:02:57,396 - INFO - Got difference for account updates
+2026-05-03 20:03:04,521 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:03:04,526 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:03:15,852 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:03:15,856 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:03:27,016 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:03:27,020 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:03:38,159 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:03:38,164 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:03:49,455 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:03:49,460 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:00,847 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:00,852 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:12,063 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:12,069 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:23,238 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:23,244 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:34,454 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:34,460 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:45,719 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:45,726 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:04:56,987 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:04:56,992 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:09:58,756 - INFO - INFO | Periodic Telegram heartbeat sent: $78,644.93
+2026-05-03 20:15:01,482 - INFO - INFO | Periodic Telegram heartbeat sent: $78,696.11
+2026-05-03 20:17:57,584 - INFO - Got difference for account updates
+2026-05-03 20:20:06,433 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:20:06,439 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:20:18,087 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:20:18,093 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:20:29,618 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:20:29,622 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:20:40,924 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:20:40,929 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:20:52,229 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:20:52,234 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:21:03,381 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:21:03,386 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:21:14,620 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:21:14,627 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:21:25,825 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:21:25,831 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:21:37,062 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:21:37,069 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:21:48,378 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:21:48,384 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:00,086 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:00,090 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:11,682 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:11,687 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:23,202 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:23,208 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:34,548 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:34,554 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:45,756 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:45,762 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:22:57,141 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:22:57,147 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:23:08,429 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:23:08,434 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:23:19,828 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:23:19,833 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:23:31,172 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:23:31,178 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:23:42,401 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:23:42,407 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:23:53,716 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:23:53,722 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:24:04,944 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:24:04,950 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:24:16,252 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:24:16,258 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:24:27,585 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:24:27,591 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:24:38,765 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:24:38,771 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:24:50,121 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 20:24:50,127 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 20:29:53,419 - INFO - INFO | Periodic Telegram heartbeat sent: $78,720.47
+2026-05-03 20:32:57,667 - INFO - Got difference for account updates
+2026-05-03 20:34:05,895 - WARNING - Server closed the connection: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 20:34:05,906 - INFO - Connection closed while receiving data: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 20:34:05,909 - INFO - Closing current connection to begin reconnect...
+2026-05-03 20:34:05,910 - INFO - <class 'ConnectionAbortedError'> during disconnect: [WinError 1236] The network connection was aborted by the local system
+2026-05-03 20:34:05,910 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 20:34:05,911 - WARNING - Attempt 1 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:06,924 - WARNING - Attempt 2 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:07,931 - WARNING - Attempt 3 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:08,941 - WARNING - Attempt 4 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:09,946 - WARNING - Attempt 5 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:10,954 - WARNING - Attempt 6 at connecting failed: OSError: [WinError 1231] The network location cannot be reached. For information about network troubleshooting, see Windows Help
+2026-05-03 20:34:11,963 - INFO - Failed reconnection attempt 1 with ConnectionError
+2026-05-03 20:34:12,969 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-03 20:34:13,016 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-03 20:34:54,863 - INFO - INFO | Periodic Telegram heartbeat sent: $78,765.88
+2026-05-03 20:39:57,905 - INFO - INFO | Periodic Telegram heartbeat sent: $78,774.26
+2026-05-03 20:45:01,060 - INFO - INFO | Periodic Telegram heartbeat sent: $78,801.73
+2026-05-03 20:47:57,746 - INFO - Got difference for account updates
+2026-05-03 20:50:03,672 - INFO - INFO | Periodic Telegram heartbeat sent: $78,742.46
+2026-05-03 20:55:07,541 - INFO - INFO | Periodic Telegram heartbeat sent: $78,723.00
+2026-05-03 21:00:09,433 - INFO - INFO | Periodic Telegram heartbeat sent: $78,720.97
+2026-05-03 21:02:57,822 - INFO - Got difference for account updates
+2026-05-03 21:05:12,430 - INFO - INFO | Periodic Telegram heartbeat sent: $78,667.82
+2026-05-03 21:10:03,698 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:10:03,702 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:10:15,183 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:10:15,189 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:10:26,881 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:10:26,887 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:00,776 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:00,781 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:11,924 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:11,929 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:23,174 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:23,181 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:34,464 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:34,470 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:45,701 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:45,706 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:11:56,996 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:11:57,001 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:12:08,218 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:12:08,224 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:12:19,363 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:12:19,369 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:12:30,617 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:12:30,622 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:13:37,693 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:13:37,699 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:13:48,982 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:13:48,987 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:00,425 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:00,431 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:11,710 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:11,715 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:23,097 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:23,103 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:34,339 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:34,346 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:45,587 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:45,593 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:14:56,855 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:14:56,861 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:17:58,014 - INFO - Got difference for account updates
+2026-05-03 21:19:59,556 - INFO - INFO | Periodic Telegram heartbeat sent: $78,685.16
+2026-05-03 21:25:02,651 - INFO - INFO | Periodic Telegram heartbeat sent: $78,673.11
+2026-05-03 21:30:05,027 - INFO - INFO | Periodic Telegram heartbeat sent: $78,717.44
+2026-05-03 21:30:38,734 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:30:38,739 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:30:50,317 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:30:50,322 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:31:01,666 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:31:01,673 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:32:58,090 - INFO - Got difference for account updates
+2026-05-03 21:36:04,230 - INFO - INFO | Periodic Telegram heartbeat sent: $78,683.57
+2026-05-03 21:41:07,054 - INFO - INFO | Periodic Telegram heartbeat sent: $78,680.30
+2026-05-03 21:46:09,027 - INFO - INFO | Periodic Telegram heartbeat sent: $78,697.24
+2026-05-03 21:47:58,204 - INFO - Got difference for account updates
+2026-05-03 21:50:04,456 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:50:04,463 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:50:16,316 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:50:16,322 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:50:27,619 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:50:27,624 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:50:38,937 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:50:38,943 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:50:50,229 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:50:50,234 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:01,665 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:01,671 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:13,020 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:13,026 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:24,566 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:24,571 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:35,911 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:35,916 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:47,283 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:47,287 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:51:58,441 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:51:58,447 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:52:09,726 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:52:09,732 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:52:20,935 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:52:20,941 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:52:32,334 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:52:32,340 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:52:43,602 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:52:43,608 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:52:54,876 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:52:54,882 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:53:06,022 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:53:06,027 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:53:17,416 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:53:17,422 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:53:28,651 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:53:28,656 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:53:39,809 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:53:39,816 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:53:51,291 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:53:51,296 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:54:02,614 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:54:02,619 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:54:13,946 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:54:13,949 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:54:25,174 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:54:25,180 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:54:36,542 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:54:36,546 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:54:47,803 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 21:54:47,807 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 21:59:50,568 - INFO - INFO | Periodic Telegram heartbeat sent: $78,721.63
+2026-05-03 22:02:58,365 - INFO - Got difference for account updates
+2026-05-03 22:04:53,281 - INFO - INFO | Periodic Telegram heartbeat sent: $78,717.40
+2026-05-03 22:09:56,580 - INFO - INFO | Periodic Telegram heartbeat sent: $78,738.68
+2026-05-03 22:15:00,342 - INFO - INFO | Periodic Telegram heartbeat sent: $78,705.65
+2026-05-03 22:17:59,578 - INFO - Got difference for account updates
+2026-05-03 22:20:02,339 - INFO - INFO | Periodic Telegram heartbeat sent: $78,691.28
+2026-05-03 22:21:21,241 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:21:21,248 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:21:32,518 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:21:32,525 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:21:43,755 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:21:43,759 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:21:55,015 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:21:55,019 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:22:06,416 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:22:06,421 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:22:17,636 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:22:17,641 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:22:28,815 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:22:28,821 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:22:40,604 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:22:40,609 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:22:52,379 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:22:52,386 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:23:03,620 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:23:03,627 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:23:15,105 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:23:15,112 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:23:26,455 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:23:26,462 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:23:37,691 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:23:37,697 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:24:22,056 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:24:22,063 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:25:07,155 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:25:07,162 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:25:18,788 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:25:18,795 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-03 22:25:30,141 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-03 22:25:30,147 - ERROR - ERROR | Could not get tick info for BTCUSD

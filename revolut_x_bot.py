@@ -10,6 +10,7 @@ import os
 import MetaTrader5 as mt5
 import asyncio
 from telethon import TelegramClient
+import logger
 
 class RevolutXAuth:
     """
@@ -99,8 +100,9 @@ class RevolutXBot:
         self.slow_ma = 21
         self.lot_size = 0.1 
 
-        # Telegram Setup
-        self.tg_client = TelegramClient('revolut_bot_session', config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
+        # Telegram Setup - Use a different session file if logging in as a Bot
+        session_name = 'revolut_bot_token_session' if hasattr(config, 'TELEGRAM_BOT_TOKEN') and config.TELEGRAM_BOT_TOKEN else 'revolut_bot_session'
+        self.tg_client = TelegramClient(session_name, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
 
     def init_mt5(self):
         if not mt5.initialize():
@@ -112,7 +114,11 @@ class RevolutXBot:
         """Sends a signal notification to the configured Telegram channel."""
         try:
             if not self.tg_client.is_connected():
-                await self.tg_client.start(phone=config.TELEGRAM_PHONE)
+                # Prefer Bot Token for login if available
+                if hasattr(config, 'TELEGRAM_BOT_TOKEN') and config.TELEGRAM_BOT_TOKEN:
+                    await self.tg_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
+                else:
+                    await self.tg_client.start(phone=config.TELEGRAM_PHONE)
             
             message = (
                 f"🚨 **NEW TRADING SIGNAL** 🚨\n\n"
@@ -126,9 +132,9 @@ class RevolutXBot:
             
             if config.TELEGRAM_CHANNELS:
                 await self.tg_client.send_message(config.TELEGRAM_CHANNELS[0], message)
-                print(f"Telegram alert sent to {config.TELEGRAM_CHANNELS[0]}")
+                logger.log_info(f"Telegram signal alert sent to {config.TELEGRAM_CHANNELS[0]}")
         except Exception as e:
-            print(f"Failed to send Telegram message: {e}")
+            logger.log_error(f"Failed to send Telegram signal: {e}")
 
     def fetch_candles(self):
         """Fetches historical candles from Revolut X."""
@@ -195,69 +201,102 @@ class RevolutXBot:
         return signal_found, last_price
 
     def execute_trade_mt5(self, signal):
-        """Executes the trade on MetaTrader 5."""
-        if not self.init_mt5(): return
+        """Executes the trade on MetaTrader 5 with detailed logging."""
+        if not self.init_mt5(): 
+            logger.log_error("MT5 initialization failed for trade execution.")
+            return
+            
         try:
             tick = mt5.symbol_info_tick(self.mt5_symbol)
-            if tick is None: return
+            if tick is None: 
+                logger.log_error(f"Could not get tick info for {self.mt5_symbol}")
+                return
+                
             order_type = mt5.ORDER_TYPE_BUY if signal == "BUY" else mt5.ORDER_TYPE_SELL
             price = tick.ask if signal == "BUY" else tick.bid
+            
             request = {
-                "action": mt5.TRADE_ACTION_DEAL, "symbol": self.mt5_symbol, "volume": float(self.lot_size),
-                "type": order_type, "price": price, "magic": 999999, "comment": "Revolut X Signal",
-                "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_IOC,
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.mt5_symbol,
+                "volume": float(self.lot_size),
+                "type": order_type,
+                "price": price,
+                "magic": 999999,
+                "comment": "Revolut X Signal",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
             }
+            
+            logger.log_info(f"Sending MT5 Order: {json.dumps(request, indent=2)}")
+            
             result = mt5.order_send(request)
-            if result.retcode == mt5.TRADE_RETCODE_DONE: print(f"MT5 Trade successful! Ticket: {result.order}")
-            else: print(f"MT5 Trade failed: {result.comment}")
-        finally: mt5.shutdown()
+            
+            if result is None:
+                logger.log_error("MT5 order_send returned None. Check connection.")
+                return
+
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                logger.log_trade(self.mt5_symbol, signal, self.lot_size, price, 0, 0, "SUCCESS")
+                logger.log_info(f"MT5 Trade Successful! Ticket: {result.order}")
+            else:
+                logger.log_error(f"MT5 Trade Failed! Retcode: {result.retcode}, Comment: {result.comment}")
+                logger.log_info(f"Full MT5 Response: {result._asdict()}")
+                
+        except Exception as e:
+            logger.log_error(f"Exception during MT5 trade execution: {e}")
+        finally:
+            mt5.shutdown()
 
     async def run(self):
         print(f"--- Revolut X -> Telegram Bot ---")
         
         try:
-            await self.tg_client.start(phone=config.TELEGRAM_PHONE)
+            # Login as Bot if token exists, otherwise use User account
+            if hasattr(config, 'TELEGRAM_BOT_TOKEN') and config.TELEGRAM_BOT_TOKEN:
+                await self.tg_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
+            else:
+                await self.tg_client.start(phone=config.TELEGRAM_PHONE)
+                
             channel_target = config.TELEGRAM_CHANNELS[0] if config.TELEGRAM_CHANNELS else 'me'
             
             startup_msg = f"🤖 **Revolut X Bot Active**\nPair: `{self.revx_symbol}`\nTimeframe: `{self.interval}m`\nStrategy: EMA {self.fast_ma}/{self.slow_ma}"
             await self.tg_client.send_message(channel_target, startup_msg)
             print(f"Bot started. Monitoring {self.revx_symbol}...")
 
-            last_status_time = 0
-            last_sent_price = 0
+            last_heartbeat_time = 0
+            heartbeat_interval = 300 # 5 minutes
 
             while True:
                 df = self.fetch_candles()
                 if df is not None:
-                    # Calculate EMAs for the latest row
-                    df['ema_fast'] = df['close'].ewm(span=self.fast_ma, adjust=False).mean()
-                    df['ema_slow'] = df['close'].ewm(span=self.slow_ma, adjust=False).mean()
-                    
                     signal, price = self.generate_signal(df)
                     
-                    # Send periodic status update to Telegram (only if price changed)
-                    if price != last_sent_price: 
+                    current_time = time.time()
+                    
+                    # 1. Send immediate signal notification
+                    if signal:
+                        await self.send_telegram_signal(signal, price)
+                        self.execute_trade_mt5(signal)
+                        last_heartbeat_time = current_time
+                    
+                    # 2. Send periodic heartbeat status update (every 5 mins)
+                    elif current_time - last_heartbeat_time >= heartbeat_interval:
                         ema9 = round(df['ema_fast'].iloc[-1], 2)
                         ema21 = round(df['ema_slow'].iloc[-1], 2)
                         diff = round(ema9 - ema21, 2)
                         
                         status_msg = (
-                            f"💰 **BTC-USD Update**\n"
+                            f"🤖 **Bot Status Update**\n"
+                            f"Pair: `{self.revx_symbol}`\n"
                             f"Price: **${price:,.2f}**\n"
                             f"EMA9: `{ema9}` | EMA21: `{ema21}`\n"
                             f"Gap: `{diff}` " + ("📈" if diff > 0 else "📉")
                         )
                         
-                        if signal:
-                            status_msg += f"\n\n🚨 **{signal} SIGNAL DETECTED!** 🚀"
-                        
                         await self.tg_client.send_message(channel_target, status_msg)
-                        last_sent_price = price
-                        print(f"Telegram updated: ${price:,.2f} (Gap: {diff})")
+                        last_heartbeat_time = current_time
+                        logger.log_info(f"Periodic Telegram heartbeat sent: ${price:,.2f}")
 
-                    if signal:
-                        self.execute_trade_mt5(signal)
-                
                 await asyncio.sleep(10) 
         except KeyboardInterrupt: print("Bot stopped.")
         except Exception as e: print(f"Critical error: {e}")
