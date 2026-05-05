@@ -98,7 +98,8 @@ class RevolutXBot:
         self.interval = 5 
         self.fast_ma = 9
         self.slow_ma = 21
-        self.lot_size = 0.1 
+        self.lot_size = config.INVESTMENT_AMOUNT / 80000 # Default fallback
+        self.last_signal_candle = None # Track last candle to prevent signal spamming
 
         # Telegram Setup - Use a different session file if logging in as a Bot
         session_name = 'revolut_bot_token_session' if hasattr(config, 'TELEGRAM_BOT_TOKEN') and config.TELEGRAM_BOT_TOKEN else 'revolut_bot_session'
@@ -110,7 +111,7 @@ class RevolutXBot:
             return False
         return True
 
-    async def send_telegram_signal(self, signal, price):
+    async def send_telegram_signal(self, signal, price, tp=None, sl=None):
         """Sends a signal notification to the configured Telegram channel."""
         try:
             if not self.tg_client.is_connected():
@@ -120,12 +121,16 @@ class RevolutXBot:
                 else:
                     await self.tg_client.start(phone=config.TELEGRAM_PHONE)
             
+            tp_text = f"**Take Profit:** ${tp:,.2f}\n" if tp else ""
+            sl_text = f"**Stop Loss:** ${sl:,.2f}\n" if sl else ""
+
             message = (
                 f"🚨 **NEW TRADING SIGNAL** 🚨\n\n"
                 f"**Exchange:** Revolut X\n"
                 f"**Pair:** {self.revx_symbol}\n"
                 f"**Action:** {signal} NOW\n"
                 f"**Price:** ${price:,.2f}\n"
+                f"{tp_text}{sl_text}"
                 f"**Timeframe:** {self.interval}m\n"
                 f"**Strategy:** EMA {self.fast_ma}/{self.slow_ma} Crossover"
             )
@@ -166,7 +171,9 @@ class RevolutXBot:
                 if 'start' in df.columns: df.rename(columns={'start': 'timestamp'}, inplace=True)
                 
                 if 'close' in df.columns:
-                    df['close'] = pd.to_numeric(df['close'])
+                    for col in ['open', 'high', 'low', 'close']:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col])
                     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     return df
                 else:
@@ -178,9 +185,70 @@ class RevolutXBot:
             
         return None
 
+    def calculate_tp_sl(self, df, signal, entry_price):
+        """Calculates dynamic Take Profit and Stop Loss."""
+        try:
+            if hasattr(config, 'USE_PERCENTAGE_EXIT') and config.USE_PERCENTAGE_EXIT:
+                # Percentage-based TP/SL
+                tp_dist = entry_price * (config.TP_PERCENT / 100)
+                sl_dist = entry_price * (config.SL_PERCENT / 100)
+            elif config.USE_ATR_FOR_EXIT:
+                # ATR Calculation
+                high_low = df['high'] - df['low']
+                high_cp = (df['high'] - df['close'].shift(1)).abs()
+                low_cp = (df['low'] - df['close'].shift(1)).abs()
+                tr = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
+                atr = tr.rolling(window=config.ATR_PERIOD).mean().iloc[-1]
+                sl_dist = atr * config.ATR_SL_MULT
+                tp_dist = atr * config.ATR_TP_MULT
+            else:
+                # Fixed points
+                sl_dist = config.FIXED_SL_POINTS * 0.01
+                tp_dist = config.FIXED_TP_POINTS * 0.01
+
+            # Apply TP Buffer (take profit slightly earlier to ensure execution)
+            buffer = getattr(config, 'TP_BUFFER_USD', 0.0)
+
+            if signal == "BUY":
+                tp = entry_price + tp_dist - buffer
+                sl = entry_price - sl_dist
+            else:
+                tp = entry_price - tp_dist + buffer
+                sl = entry_price + sl_dist
+
+            return round(tp, 2), round(sl, 2)
+        except Exception as e:
+            logger.log_error(f"Error calculating TP/SL: {e}")
+            return None, None
+
+    def calculate_lot_size(self, price):
+        """Calculates lot size based on investment amount and broker limits."""
+        if not self.init_mt5(): return 0.01
+        try:
+            symbol_info = mt5.symbol_info(self.mt5_symbol)
+            if symbol_info is None: return 0.01
+            
+            # Calculate lot based on investment amount (e.g. 50 USD)
+            raw_lot = config.INVESTMENT_AMOUNT / price
+            
+            # Round to nearest volume step
+            step = symbol_info.volume_step
+            lot = round(raw_lot / step) * step
+            
+            # Ensure within broker limits
+            lot = max(symbol_info.volume_min, min(symbol_info.volume_max, lot))
+            return round(lot, 2)
+        except Exception as e:
+            logger.log_error(f"Lot calculation error: {e}")
+            return 0.01
+        finally:
+            mt5.shutdown()
+
     def generate_signal(self, df):
         """Generates signals and prints current status."""
-        if df is None or len(df) < self.slow_ma + 1: return None, None
+        if df is None or len(df) < max(self.slow_ma, config.ATR_PERIOD if hasattr(config, 'ATR_PERIOD') else 14) + 1: 
+            return None, None, None, None, None
+            
         df['ema_fast'] = df['close'].ewm(span=self.fast_ma, adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=self.slow_ma, adjust=False).mean()
         prev_row = df.iloc[-2]; curr_row = df.iloc[-1]
@@ -189,18 +257,22 @@ class RevolutXBot:
         
         status = "Monitoring..."
         signal_found = None
+        tp, sl = None, None
+        lot = self.calculate_lot_size(last_price)
         
         if prev_row['ema_fast'] <= prev_row['ema_slow'] and curr_row['ema_fast'] > curr_row['ema_slow']:
             status = "🚀 SIGNAL! (BUY)"
             signal_found = "BUY"
+            tp, sl = self.calculate_tp_sl(df, signal_found, last_price)
         elif prev_row['ema_fast'] >= prev_row['ema_slow'] and curr_row['ema_fast'] < curr_row['ema_slow']:
             status = "🔻 SIGNAL! (SELL)"
             signal_found = "SELL"
+            tp, sl = self.calculate_tp_sl(df, signal_found, last_price)
 
         print(f"[{pd.Timestamp.now().strftime('%H:%M:%S')}] {self.revx_symbol}: ${last_price:,.2f} | EMA9: {fast_val} | EMA21: {slow_val} | {status}")
-        return signal_found, last_price
+        return signal_found, last_price, tp, sl, lot
 
-    def execute_trade_mt5(self, signal):
+    def execute_trade_mt5(self, signal, tp=None, sl=None, lot=None):
         """Executes the trade on MetaTrader 5 with detailed logging."""
         if not self.init_mt5(): 
             logger.log_error("MT5 initialization failed for trade execution.")
@@ -214,13 +286,16 @@ class RevolutXBot:
                 
             order_type = mt5.ORDER_TYPE_BUY if signal == "BUY" else mt5.ORDER_TYPE_SELL
             price = tick.ask if signal == "BUY" else tick.bid
+            trade_vol = float(lot if lot else self.lot_size)
             
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.mt5_symbol,
-                "volume": float(self.lot_size),
+                "volume": trade_vol,
                 "type": order_type,
                 "price": price,
+                "sl": float(sl) if sl else 0.0,
+                "tp": float(tp) if tp else 0.0,
                 "magic": 999999,
                 "comment": "Revolut X Signal",
                 "type_time": mt5.ORDER_TIME_GTC,
@@ -236,7 +311,7 @@ class RevolutXBot:
                 return
 
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                logger.log_trade(self.mt5_symbol, signal, self.lot_size, price, 0, 0, "SUCCESS")
+                logger.log_trade(self.mt5_symbol, signal, trade_vol, price, sl or 0, tp or 0, "SUCCESS")
                 logger.log_info(f"MT5 Trade Successful! Ticket: {result.order}")
             else:
                 logger.log_error(f"MT5 Trade Failed! Retcode: {result.retcode}, Comment: {result.comment}")
@@ -265,19 +340,24 @@ class RevolutXBot:
 
             last_heartbeat_time = 0
             heartbeat_interval = 300 # 5 minutes
+            last_price_update_time = 0
+            price_update_interval = 60 # 1 minute
 
             while True:
                 df = self.fetch_candles()
                 if df is not None:
-                    signal, price = self.generate_signal(df)
+                    signal, price, tp, sl, lot = self.generate_signal(df)
                     
                     current_time = time.time()
+                    current_candle_time = df['timestamp'].iloc[-1]
                     
-                    # 1. Send immediate signal notification
-                    if signal:
-                        await self.send_telegram_signal(signal, price)
-                        self.execute_trade_mt5(signal)
+                    # 1. Send immediate signal notification (Only once per candle)
+                    if signal and current_candle_time != self.last_signal_candle:
+                        await self.send_telegram_signal(signal, price, tp, sl)
+                        self.execute_trade_mt5(signal, tp, sl, lot)
+                        self.last_signal_candle = current_candle_time
                         last_heartbeat_time = current_time
+                        last_price_update_time = current_time # Reset price update timer as well
                     
                     # 2. Send periodic heartbeat status update (every 5 mins)
                     elif current_time - last_heartbeat_time >= heartbeat_interval:
@@ -295,7 +375,14 @@ class RevolutXBot:
                         
                         await self.tg_client.send_message(channel_target, status_msg)
                         last_heartbeat_time = current_time
+                        last_price_update_time = current_time # Sync price update with heartbeat
                         logger.log_info(f"Periodic Telegram heartbeat sent: ${price:,.2f}")
+
+                    # 3. Send simple price update every minute
+                    elif current_time - last_price_update_time >= price_update_interval:
+                        price_msg = f"💰 **Price Update:** `{self.revx_symbol}` is now **${price:,.2f}**"
+                        await self.tg_client.send_message(channel_target, price_msg)
+                        last_price_update_time = current_time
 
                 await asyncio.sleep(10) 
         except KeyboardInterrupt: print("Bot stopped.")

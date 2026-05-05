@@ -31,6 +31,13 @@ EMA_LONG = 21
 RISK_PERCENT = 1.0  # Percentage of account equity to risk per trade
 MAX_LOT_SIZE = 1.0  # Absolute limit for individual trade volume
 
+# --- Investment & Profit Targets ---
+INVESTMENT_AMOUNT = 50.0  # Total amount to invest per trade (e.g., 50 USD)
+TP_PERCENT = 0.15        # Take Profit target (e.g., 0.15% for quick 5m scalps)
+SL_PERCENT = 0.10        # Stop Loss limit (e.g., 0.10% for quick 5m scalps)
+TP_BUFFER_USD = 10.0     # Take profit "earlier" by this amount to ensure fill (e.g., $10)
+USE_PERCENTAGE_EXIT = True # Use percentage-based TP/SL instead of ATR or Points
+
 # --- Stop Loss (SL) and Take Profit (TP) Logic ---
 # Set 'USE_ATR_FOR_EXIT' to True to dynamically set SL/TP based on market volatility (ATR).
 # Set to False to use fixed point distances from the entry price.

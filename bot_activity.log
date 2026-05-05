@@ -978,3 +978,155 @@
 2026-05-03 22:25:18,795 - ERROR - ERROR | Could not get tick info for BTCUSD
 2026-05-03 22:25:30,141 - INFO - INFO | Telegram signal alert sent to -1003857703703
 2026-05-03 22:25:30,147 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 12:28:43,719 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 12:28:43,768 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 12:28:45,799 - INFO - INFO | Periodic Telegram heartbeat sent: $80,665.52
+2026-05-05 12:31:34,879 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 12:31:34,931 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 12:31:36,722 - INFO - INFO | Periodic Telegram heartbeat sent: $80,685.58
+2026-05-05 12:33:54,356 - INFO - INFO | Periodic Telegram heartbeat sent: $80,641.74
+2026-05-05 12:33:54,928 - INFO - Got difference for channel 3857703703 updates
+2026-05-05 12:36:45,435 - ERROR - Fatal error handling updates (this is a bug in Telethon v1.42.0, please report it)
+Traceback (most recent call last):
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py", line 467, in _update_loop
+    _preprocess_updates = await self._preprocess_updates(processed, users, chats)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py", line 478, in _preprocess_updates
+    await utils.maybe_async(self.session.process_entities(types.contacts.ResolvedPeer(None, users, chats)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\sessions\sqlite.py", line 301, in process_entities
+    c.executemany(
+sqlite3.OperationalError: database is locked
+2026-05-05 12:36:50,935 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-05-05 12:36:50,936 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-05-05 12:36:50,936 - ERROR - Unhandled exception from keepalive_handle after cancelling <class '_asyncio.Task'> (<Task finished name='Task-7' coro=<UpdateMethods._keepalive_loop() done, defined at C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py:485> exception=OperationalError('database is locked')>)
+Traceback (most recent call last):
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\helpers.py", line 176, in _cancel
+    await task
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py", line 521, in _keepalive_loop
+    await self._save_states_and_entities()
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\telegrambaseclient.py", line 701, in _save_states_and_entities
+    self.session.process_entities(
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\sessions\sqlite.py", line 301, in process_entities
+    c.executemany(
+sqlite3.OperationalError: database is locked
+2026-05-05 12:36:56,461 - ERROR - unhandled exception during asyncio.run() shutdown
+task: <Task finished name='Task-8' coro=<TelegramBaseClient._disconnect_coro() done, defined at C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\telegrambaseclient.py:716> exception=OperationalError('database is locked')>
+Traceback (most recent call last):
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\telegrambaseclient.py", line 746, in _disconnect_coro
+    await self._save_states_and_entities()
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\telegrambaseclient.py", line 701, in _save_states_and_entities
+    self.session.process_entities(
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\sessions\sqlite.py", line 301, in process_entities
+    c.executemany(
+sqlite3.OperationalError: database is locked
+2026-05-05 12:38:57,175 - INFO - INFO | Periodic Telegram heartbeat sent: $80,574.27
+2026-05-05 12:38:57,752 - WARNING - Cannot get difference for channel 3857703703 since the account is likely misusing the session: Could not find a matching Constructor ID for the TLObject that was supposed to be read with ID 38116ee0. See the FAQ for more details. Remaining bytes: b"\xe0n\x118\x82D\t\x00\x8b\x03\x00\x00\x1e7\xa5\xa2\x17\xe3\xef\xe5\x00\x00\x00\x00,\xba\xf9ih\xf0\x9f\xa4\x96 Bot Status Update\nPair: BTC-USD\nPrice: $80,615.25\nEMA9: 80669.29 | EMA21: 80747.61\nGap: -78.32 \xf0\x9f\x93\x89\x00\x00\x00\x15\xc4\xb5\x1c\x06\x00\x00\x00\xc9\x0ba\xbd\x03\x00\x00\x00\x11\x00\x00\x00q\x05\xa2(\x1b\x00\x00\x00\x07\x00\x00\x00\xc9\x0ba\xbd*\x00\x00\x00\n\x00\x00\x00q\x05\xa2(;\x00\x00\x00\x08\x00\x00\x00q\x05\xa2(M\x00\x00\x00\x08\x00\x00\x00q\x05\xa2([\x00\x00\x00\x06\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\ntestsignal\x00\xe0n\x118\x82D\t\x00\x8c\x03\x00\x00\x1e7\xa5\xa2\x17\xe3\xef\xe5\x00\x00\x00\x00\xb5\xba\xf9ig\xf0\x9f\xa4\x96 Bot Status Update\nPair: BTC-USD\nPrice: $80,574.27\nEMA9: 80661.09 | EMA21: 80743.89\nGap: -82.8 \xf0\x9f\x93\x89\x15\xc4\xb5\x1c\x06\x00\x00\x00\xc9\x0ba\xbd\x03\x00\x00\x00\x11\x00\x00\x00q\x05\xa2(\x1b\x00\x00\x00\x07\x00\x00\x00\xc9\x0ba\xbd*\x00\x00\x00\n\x00\x00\x00q\x05\xa2(;\x00\x00\x00\x08\x00\x00\x00q\x05\xa2(M\x00\x00\x00\x08\x00\x00\x00q\x05\xa2([\x00\x00\x00\x05\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\ntestsignal\x00\x15\xc4\xb5\x1c\x02\x00\x00\x00\xd6\xbf\x90N\x8b\x03\x00\x00\xbc\xa0{\x14N\xa6\x15\xbc\xd6\xbf\x90N\x8c\x03\x00\x00\x1b\n\\Bp\x1b\xa7U\x15\xc4\xb5\x1c\x01\x00\x00\x00d\x94%\x83 h\x00\x00\x00\x00\x00\x00\x17\xe3\xef\xe5\x00\x00\x00\x00\xcbl\x1c\x87x[\xff\xa9\x11testsignalchannel\x00\x00\x1c\x01\xc17\x81Q\xf7i\xd5$\xb2_?\x10\x00\x00\x15\xc4\xb5\x1c\x02\x00\x00\x00(\xc6\x97\x8f+@\x00\x02\x00\x00\x00\x00\x18\xac'\x08\x00\x00\x00\x00Q\xe1\x17\x1e\rTgz\x07Channel\x0bChannel_Bot\x06\xf7\xd1\x82\x00\x00\x00\x00\xa9\xa71\x1b\x18\xac'\x08\x01\x00\x00\x00\x04\x00\x00\x00(\xc6\x97\x8f\x0bD\x00\x02\x02\x00\x00\x00\x13\xaco\t\x02\x00\x00\x00\x00Q\x0c\xeb\ta\x97{\ntestsignal\x00\x0fIvayloSignalbot\x01\x00\x00\x00"
+2026-05-05 12:38:57,753 - INFO - Disconnecting from 149.154.167.92:443/TcpFull...
+2026-05-05 12:38:57,753 - INFO - Disconnection from 149.154.167.92:443/TcpFull complete!
+2026-05-05 12:38:57,753 - ERROR - Unhandled exception from keepalive_handle after cancelling <class '_asyncio.Task'> (<Task finished name='Task-7' coro=<UpdateMethods._keepalive_loop() done, defined at C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py:485> exception=OperationalError('database is locked')>)
+Traceback (most recent call last):
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\helpers.py", line 176, in _cancel
+    await task
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\updates.py", line 521, in _keepalive_loop
+    await self._save_states_and_entities()
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\client\telegrambaseclient.py", line 701, in _save_states_and_entities
+    self.session.process_entities(
+  File "C:\Users\Gamer\AppData\Local\Programs\Python\Python312\Lib\site-packages\telethon\sessions\sqlite.py", line 301, in process_entities
+    c.executemany(
+sqlite3.OperationalError: database is locked
+2026-05-05 17:33:32,429 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 17:33:32,479 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 17:33:35,002 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 17:33:37,488 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 17:37:35,790 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 17:37:35,796 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 17:42:40,190 - INFO - INFO | Periodic Telegram heartbeat sent: $81,263.33
+2026-05-05 17:47:43,817 - INFO - INFO | Periodic Telegram heartbeat sent: $81,150.00
+2026-05-05 17:48:33,409 - INFO - Got difference for account updates
+2026-05-05 17:52:48,056 - INFO - INFO | Periodic Telegram heartbeat sent: $81,265.70
+2026-05-05 17:55:17,649 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 17:55:17,697 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 17:55:19,612 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 17:55:19,621 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 18:00:24,776 - INFO - INFO | Periodic Telegram heartbeat sent: $81,339.85
+2026-05-05 18:03:17,636 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 18:03:17,691 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 18:03:19,635 - INFO - INFO | Periodic Telegram heartbeat sent: $81,245.03
+2026-05-05 18:04:26,863 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 18:04:26,868 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 18:09:32,554 - INFO - INFO | Periodic Telegram heartbeat sent: $81,445.10
+2026-05-05 18:11:51,167 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 18:11:51,216 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 18:11:53,318 - INFO - INFO | Periodic Telegram heartbeat sent: $81,509.82
+2026-05-05 18:16:58,253 - INFO - INFO | Periodic Telegram heartbeat sent: $81,548.35
+2026-05-05 18:22:03,366 - INFO - INFO | Periodic Telegram heartbeat sent: $81,556.30
+2026-05-05 18:26:51,823 - INFO - Got difference for account updates
+2026-05-05 18:27:07,194 - INFO - INFO | Periodic Telegram heartbeat sent: $81,611.76
+2026-05-05 18:32:12,849 - INFO - INFO | Periodic Telegram heartbeat sent: $81,613.05
+2026-05-05 18:37:17,633 - INFO - INFO | Periodic Telegram heartbeat sent: $81,629.46
+2026-05-05 18:41:51,951 - INFO - Got difference for account updates
+2026-05-05 18:42:23,452 - INFO - INFO | Periodic Telegram heartbeat sent: $81,606.53
+2026-05-05 18:47:29,310 - INFO - INFO | Periodic Telegram heartbeat sent: $81,699.00
+2026-05-05 18:52:32,747 - INFO - INFO | Periodic Telegram heartbeat sent: $81,600.00
+2026-05-05 18:56:52,242 - INFO - Got difference for account updates
+2026-05-05 18:57:37,832 - INFO - INFO | Periodic Telegram heartbeat sent: $81,567.27
+2026-05-05 19:02:47,317 - INFO - INFO | Periodic Telegram heartbeat sent: $81,529.20
+2026-05-05 19:07:57,517 - INFO - INFO | Periodic Telegram heartbeat sent: $81,582.64
+2026-05-05 19:11:52,307 - INFO - Got difference for account updates
+2026-05-05 19:13:08,626 - INFO - INFO | Periodic Telegram heartbeat sent: $81,511.50
+2026-05-05 19:18:14,944 - INFO - INFO | Periodic Telegram heartbeat sent: $81,432.93
+2026-05-05 19:23:19,921 - INFO - INFO | Periodic Telegram heartbeat sent: $81,495.38
+2026-05-05 19:26:52,390 - INFO - Got difference for account updates
+2026-05-05 19:28:25,613 - INFO - INFO | Periodic Telegram heartbeat sent: $81,356.17
+2026-05-05 19:31:17,108 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 19:31:17,116 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 19:36:24,474 - INFO - INFO | Periodic Telegram heartbeat sent: $81,263.54
+2026-05-05 19:41:32,392 - INFO - INFO | Periodic Telegram heartbeat sent: $81,134.81
+2026-05-05 19:41:52,468 - INFO - Got difference for account updates
+2026-05-05 19:46:37,041 - INFO - INFO | Periodic Telegram heartbeat sent: $81,165.91
+2026-05-05 19:51:44,079 - INFO - INFO | Periodic Telegram heartbeat sent: $81,233.08
+2026-05-05 19:56:53,593 - INFO - Got difference for account updates
+2026-05-05 19:56:53,637 - INFO - INFO | Periodic Telegram heartbeat sent: $81,264.37
+2026-05-05 19:56:53,682 - INFO - Got difference for channel 3857703703 updates
+2026-05-05 20:02:03,701 - INFO - INFO | Periodic Telegram heartbeat sent: $81,245.02
+2026-05-05 20:07:04,723 - INFO - INFO | Periodic Telegram heartbeat sent: $81,321.93
+2026-05-05 20:11:53,673 - INFO - Got difference for account updates
+2026-05-05 20:12:09,276 - INFO - INFO | Periodic Telegram heartbeat sent: $81,277.61
+2026-05-05 20:17:16,679 - INFO - INFO | Periodic Telegram heartbeat sent: $81,366.21
+2026-05-05 20:22:22,372 - INFO - INFO | Periodic Telegram heartbeat sent: $81,433.67
+2026-05-05 20:26:53,778 - INFO - Got difference for account updates
+2026-05-05 20:27:26,437 - INFO - INFO | Periodic Telegram heartbeat sent: $81,411.26
+2026-05-05 20:32:31,518 - INFO - INFO | Periodic Telegram heartbeat sent: $81,296.20
+2026-05-05 20:37:41,034 - INFO - INFO | Periodic Telegram heartbeat sent: $81,357.00
+2026-05-05 20:41:53,862 - INFO - Got difference for account updates
+2026-05-05 20:42:47,321 - INFO - INFO | Periodic Telegram heartbeat sent: $81,319.25
+2026-05-05 20:47:54,657 - INFO - INFO | Periodic Telegram heartbeat sent: $81,281.93
+2026-05-05 20:53:00,749 - INFO - INFO | Periodic Telegram heartbeat sent: $81,316.38
+2026-05-05 20:56:53,946 - INFO - Got difference for account updates
+2026-05-05 20:58:03,492 - INFO - INFO | Periodic Telegram heartbeat sent: $81,270.00
+2026-05-05 21:03:05,082 - INFO - INFO | Periodic Telegram heartbeat sent: $81,318.64
+2026-05-05 21:08:11,664 - INFO - INFO | Periodic Telegram heartbeat sent: $81,401.60
+2026-05-05 21:11:02,025 - INFO - INFO | Telegram signal alert sent to -1003857703703
+2026-05-05 21:11:02,032 - ERROR - ERROR | Could not get tick info for BTCUSD
+2026-05-05 21:11:54,018 - INFO - Got difference for account updates
+2026-05-05 21:16:06,758 - INFO - INFO | Periodic Telegram heartbeat sent: $81,526.89
+2026-05-05 21:21:11,292 - INFO - INFO | Periodic Telegram heartbeat sent: $81,503.15
+2026-05-05 21:26:15,536 - INFO - INFO | Periodic Telegram heartbeat sent: $81,435.13
+2026-05-05 21:26:54,090 - INFO - Got difference for account updates
+2026-05-05 21:31:19,260 - INFO - INFO | Periodic Telegram heartbeat sent: $81,429.93
+2026-05-05 21:36:24,552 - INFO - INFO | Periodic Telegram heartbeat sent: $81,493.86
+2026-05-05 21:41:29,006 - INFO - INFO | Periodic Telegram heartbeat sent: $81,468.92
+2026-05-05 21:41:54,200 - INFO - Got difference for account updates
+2026-05-05 21:46:39,085 - INFO - INFO | Periodic Telegram heartbeat sent: $81,501.46
+2026-05-05 21:51:48,560 - INFO - INFO | Periodic Telegram heartbeat sent: $81,562.17
+2026-05-05 21:56:54,277 - INFO - Got difference for account updates
+2026-05-05 21:56:59,162 - INFO - INFO | Periodic Telegram heartbeat sent: $81,476.00
+2026-05-05 22:02:09,390 - INFO - INFO | Periodic Telegram heartbeat sent: $81,492.70
+2026-05-05 22:07:19,851 - INFO - INFO | Periodic Telegram heartbeat sent: $81,490.15
+2026-05-05 22:11:54,377 - INFO - Got difference for account updates
+2026-05-05 22:12:20,195 - INFO - INFO | Periodic Telegram heartbeat sent: $81,437.60
+2026-05-05 22:17:29,285 - INFO - INFO | Periodic Telegram heartbeat sent: $81,517.48
+2026-05-05 22:22:34,783 - INFO - INFO | Periodic Telegram heartbeat sent: $81,550.00
+2026-05-05 22:26:54,461 - INFO - Got difference for account updates
+2026-05-05 22:27:39,029 - INFO - INFO | Periodic Telegram heartbeat sent: $81,570.98
