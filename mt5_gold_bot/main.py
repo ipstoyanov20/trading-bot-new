@@ -14,6 +14,15 @@ def run_bot():
         log_error("Could not initialize MT5 connection. Exiting.")
         return
 
+    # --- TEST BUY ORDER ON STARTUP ---
+    log_info("Placing a test BUY order to verify connection and trading permissions...")
+    test_order = place_order(config.SYMBOL, mt5.ORDER_TYPE_BUY)
+    if test_order:
+        log_info(f"Test BUY order successful. Order details: {test_order}")
+    else:
+        log_error("Test BUY order failed. Check logs above for details.")
+    # ---------------------------------
+
     log_info(f"Bot successfully started.")
     log_info(f"Symbol: {config.SYMBOL}")
     log_info(f"Timeframe: M15 (15 Minutes)")
