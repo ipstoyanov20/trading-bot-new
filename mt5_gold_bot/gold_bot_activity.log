@@ -259,3 +259,9 @@
 2026-06-16 18:44:39,212 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
 2026-06-16 18:44:39,212 - INFO - INFO | Startup check complete. Signal tracking initialized at candle 2026-06-16 18:15:00.
 2026-06-16 18:44:39,212 - INFO - INFO | Waiting for the next candle completion to check for crossovers...
+2026-06-16 18:44:54,215 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:45:09,218 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4328.722, EMA21: 4333.223) | Last Completed Candle Time: 2026-06-16 18:30:00
+2026-06-16 18:45:09,218 - INFO - INFO | New candle completed: 2026-06-16 18:30:00
+2026-06-16 18:45:09,218 - INFO - INFO | No crossover detected on this completed candle.
+2026-06-16 18:45:14,429 - INFO - INFO | Bot execution paused by user (KeyboardInterrupt).
+2026-06-16 18:45:14,429 - INFO - INFO | MetaTrader 5 connection closed gracefully.
