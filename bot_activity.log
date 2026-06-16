@@ -1130,3 +1130,27 @@ sqlite3.OperationalError: database is locked
 2026-05-05 22:22:34,783 - INFO - INFO | Periodic Telegram heartbeat sent: $81,550.00
 2026-05-05 22:26:54,461 - INFO - Got difference for account updates
 2026-05-05 22:27:39,029 - INFO - INFO | Periodic Telegram heartbeat sent: $81,570.98
+2026-05-05 22:28:44,797 - INFO - Connecting to 149.154.167.92:443/TcpFull...
+2026-05-05 22:28:44,845 - INFO - Connection to 149.154.167.92:443/TcpFull complete!
+2026-05-05 22:28:46,711 - INFO - INFO | Periodic Telegram heartbeat sent: $81,571.00
+2026-05-05 22:33:53,072 - INFO - INFO | Periodic Telegram heartbeat sent: $81,570.91
+2026-05-05 22:39:02,501 - INFO - INFO | Periodic Telegram heartbeat sent: $81,549.27
+2026-05-05 22:43:45,565 - INFO - Got difference for account updates
+2026-05-05 22:44:08,234 - INFO - INFO | Periodic Telegram heartbeat sent: $81,610.64
+2026-05-05 22:49:15,408 - INFO - INFO | Periodic Telegram heartbeat sent: $81,693.79
+2026-05-05 22:54:20,652 - INFO - INFO | Periodic Telegram heartbeat sent: $81,630.80
+2026-05-05 22:58:45,651 - INFO - Got difference for account updates
+2026-05-05 22:59:28,613 - INFO - INFO | Periodic Telegram heartbeat sent: $81,630.00
+2026-05-05 23:04:35,886 - INFO - INFO | Periodic Telegram heartbeat sent: $81,692.33
+2026-05-05 23:09:42,028 - INFO - INFO | Periodic Telegram heartbeat sent: $81,658.97
+2026-05-05 23:13:45,732 - INFO - Got difference for account updates
+2026-05-05 23:14:46,320 - INFO - INFO | Periodic Telegram heartbeat sent: $81,709.46
+2026-05-05 23:19:51,624 - INFO - INFO | Periodic Telegram heartbeat sent: $81,625.90
+2026-05-05 23:24:58,595 - INFO - INFO | Periodic Telegram heartbeat sent: $81,642.11
+2026-05-05 23:28:45,825 - INFO - Got difference for account updates
+2026-05-05 23:30:03,840 - INFO - INFO | Periodic Telegram heartbeat sent: $81,563.09
+2026-05-05 23:35:10,546 - INFO - INFO | Periodic Telegram heartbeat sent: $81,675.76
+2026-05-05 23:40:14,886 - INFO - INFO | Periodic Telegram heartbeat sent: $81,624.45
+2026-05-05 23:43:45,913 - INFO - Got difference for account updates
+2026-05-05 23:45:21,653 - INFO - INFO | Periodic Telegram heartbeat sent: $81,659.27
+2026-05-05 23:50:25,313 - INFO - INFO | Periodic Telegram heartbeat sent: $81,615.81
