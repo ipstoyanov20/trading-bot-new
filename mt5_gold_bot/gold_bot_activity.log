@@ -222,3 +222,40 @@
 2026-06-16 17:15:01,647 - INFO - INFO | Executing SELL trade on XAUUSD...
 2026-06-16 17:15:01,647 - ERROR - ERROR | Unexpected exception in execution loop: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
 2026-06-16 17:15:01,648 - INFO - INFO | MetaTrader 5 connection closed gracefully.
+2026-06-16 18:42:04,857 - INFO - INFO | Initializing Gold Crossover Bot...
+2026-06-16 18:42:04,867 - INFO - INFO | MT5 Connected. Account: 5051839207, Balance: 100000.0 USD
+2026-06-16 18:42:04,868 - INFO - INFO | Placing a test BUY order to verify connection and trading permissions...
+2026-06-16 18:43:28,584 - INFO - INFO | Initializing Gold Crossover Bot...
+2026-06-16 18:43:28,594 - INFO - INFO | MT5 Connected. Account: 5051839207, Balance: 100000.0 USD
+2026-06-16 18:43:28,594 - INFO - INFO | Placing a test BUY order to verify connection and trading permissions...
+2026-06-16 18:43:28,594 - INFO - TRADE | 2026-06-16 18:43:28 | Symbol: XAUUSD | Action: BUY | Lot: 2.00 | Price: 4325.84 | SL: 4320.84 | TP: 4335.84 | Result: FAILED: Code 10027 (AutoTrading disabled by client)
+2026-06-16 18:43:28,594 - ERROR - ERROR | Test BUY order failed. Check logs above for details.
+2026-06-16 18:43:28,595 - INFO - INFO | Bot successfully started.
+2026-06-16 18:43:28,595 - INFO - INFO | Symbol: XAUUSD
+2026-06-16 18:43:28,595 - INFO - INFO | Timeframe: M15 (15 Minutes)
+2026-06-16 18:43:28,595 - INFO - INFO | Strategy parameters: EMA9 / EMA21
+2026-06-16 18:43:28,595 - INFO - INFO | Risk per trade: 1.0% of equity
+2026-06-16 18:43:28,595 - INFO - INFO | Loop interval: 15 seconds
+2026-06-16 18:43:28,599 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:43:28,599 - INFO - INFO | Startup check complete. Signal tracking initialized at candle 2026-06-16 18:15:00.
+2026-06-16 18:43:28,599 - INFO - INFO | Waiting for the next candle completion to check for crossovers...
+2026-06-16 18:43:43,602 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:43:58,606 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:44:13,609 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:44:28,612 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:44:37,432 - INFO - INFO | Bot execution paused by user (KeyboardInterrupt).
+2026-06-16 18:44:37,432 - INFO - INFO | MetaTrader 5 connection closed gracefully.
+2026-06-16 18:44:39,096 - INFO - INFO | Initializing Gold Crossover Bot...
+2026-06-16 18:44:39,105 - INFO - INFO | MT5 Connected. Account: 5051839207, Balance: 100000.0 USD
+2026-06-16 18:44:39,106 - INFO - INFO | Placing a test BUY order to verify connection and trading permissions...
+2026-06-16 18:44:39,207 - INFO - TRADE | 2026-06-16 18:44:39 | Symbol: XAUUSD | Action: BUY | Lot: 2.00 | Price: 4326.65 | SL: 4321.65 | TP: 4336.65 | Result: SUCCESS (Ticket: 57109708570)
+2026-06-16 18:44:39,208 - INFO - INFO | Test BUY order successful. Order details: OrderSendResult(retcode=10009, deal=56774598715, order=57109708570, volume=2.0, price=4326.65, bid=0.0, ask=0.0, comment='Request executed', request_id=2670628269, retcode_external=0, request=TradeRequest(action=1, magic=20260616, order=0, symbol='XAUUSD', volume=2.0, price=4326.65, stoplimit=0.0, sl=4321.65, tp=4336.65, deviation=20, type=0, type_filling=0, type_time=0, expiration=0, comment='Gold Crossover Bot', position=0, position_by=0))
+2026-06-16 18:44:39,208 - INFO - INFO | Bot successfully started.
+2026-06-16 18:44:39,208 - INFO - INFO | Symbol: XAUUSD
+2026-06-16 18:44:39,208 - INFO - INFO | Timeframe: M15 (15 Minutes)
+2026-06-16 18:44:39,208 - INFO - INFO | Strategy parameters: EMA9 / EMA21
+2026-06-16 18:44:39,208 - INFO - INFO | Risk per trade: 1.0% of equity
+2026-06-16 18:44:39,208 - INFO - INFO | Loop interval: 15 seconds
+2026-06-16 18:44:39,212 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4329.242, EMA21: 4333.881) | Last Completed Candle Time: 2026-06-16 18:15:00
+2026-06-16 18:44:39,212 - INFO - INFO | Startup check complete. Signal tracking initialized at candle 2026-06-16 18:15:00.
+2026-06-16 18:44:39,212 - INFO - INFO | Waiting for the next candle completion to check for crossovers...

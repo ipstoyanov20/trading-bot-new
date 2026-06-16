@@ -41,10 +41,14 @@ def get_filling_type(symbol):
         
     filling_mode = symbol_info.filling_mode
     
+    # Define MQL5 filling mode constants missing from the Python library
+    SYMBOL_FILLING_FOK = 1
+    SYMBOL_FILLING_IOC = 2
+    
     # Check flags for filling modes
-    if filling_mode & mt5.SYMBOL_FILLING_FOK:
+    if filling_mode & SYMBOL_FILLING_FOK:
         return mt5.ORDER_FILLING_FOK
-    elif filling_mode & mt5.SYMBOL_FILLING_IOC:
+    elif filling_mode & SYMBOL_FILLING_IOC:
         return mt5.ORDER_FILLING_IOC
     else:
         return mt5.ORDER_FILLING_RETURN
@@ -175,8 +179,8 @@ def place_order(symbol, order_type, atr=None):
     
     # Validate order parameters before transmission
     check_result = mt5.order_check(request)
-    if check_result.retcode != mt5.TRADE_RETCODE_DONE:
-        log_error(f"MT5 pre-order validation failed for {symbol}: {check_result.comment}")
+    if check_result.retcode not in (0, mt5.TRADE_RETCODE_DONE):
+        log_error(f"MT5 pre-order validation failed for {symbol}: {check_result.comment} (Code: {check_result.retcode})")
         return None
         
     # Execute the trade
