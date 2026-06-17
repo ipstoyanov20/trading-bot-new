@@ -138,7 +138,7 @@ def get_sl_tp(symbol, order_type, entry_price, atr):
         
     return sl, tp, sl_dist
 
-def place_order(symbol, order_type, atr=None):
+def place_order(symbol, order_type, atr=None, volume=None, sl_price_dist=None, tp_price_dist=None):
     """
     Assembles, validates, and routes order to MT5.
     """
@@ -158,8 +158,23 @@ def place_order(symbol, order_type, atr=None):
         return None
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-    sl, tp, sl_dist = get_sl_tp(symbol, order_type, price, atr)
-    lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
+    
+    if sl_price_dist is not None and tp_price_dist is not None:
+        if order_type == mt5.ORDER_TYPE_BUY:
+            sl = price - sl_price_dist
+            tp = price + tp_price_dist
+        else:
+            sl = price + sl_price_dist
+            tp = price - tp_price_dist
+        sl_dist = sl_price_dist
+    else:
+        sl, tp, sl_dist = get_sl_tp(symbol, order_type, price, atr)
+        
+    if volume is not None:
+        lots = volume
+    else:
+        lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
+        
     filling_mode = get_filling_type(symbol)
     
     request = {
