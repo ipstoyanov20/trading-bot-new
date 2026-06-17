@@ -48,20 +48,17 @@ def run_bot():
                         
                         # 4. Check if position already exists for symbol
                         if not check_open_positions(config.SYMBOL):
-                            order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
-                            log_info(f"Executing {signal} simultaneous trades on {config.SYMBOL}...")
-                            
-                            # Order 1
-                            place_order(config.SYMBOL, order_type, atr, 
-                                        volume=config.LOT_SIZE, 
-                                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
-                                        
-                            # Order 2
-                            place_order(config.SYMBOL, order_type, atr, 
-                                        volume=config.LOT_SIZE, 
-                                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                            if signal == 'SELL':
+                                order_type = mt5.ORDER_TYPE_SELL
+                                log_info(f"Executing {signal} trade on {config.SYMBOL}...")
+                                
+                                # Order 1
+                                place_order(config.SYMBOL, order_type, atr, 
+                                            volume=config.LOT_SIZE, 
+                                            sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                                            tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                            else:
+                                log_info(f"Signal {signal} ignored. Bot is configured to execute only SELL signals.")
                         else:
                             log_info(f"Signal ignored. There is already an active position open for {config.SYMBOL}.")
                     else:

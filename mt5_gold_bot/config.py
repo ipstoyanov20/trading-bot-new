@@ -39,5 +39,5 @@ LOOP_INTERVAL_SECONDS = 15     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
 LOT_SIZE = 0.02                # Lot size for simultaneous orders
-FIXED_TP_PRICE_DIST = 2.0      # Take Profit distance from entry price
+FIXED_TP_PRICE_DIST = 3.0      # Take Profit distance from entry price
 FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price
