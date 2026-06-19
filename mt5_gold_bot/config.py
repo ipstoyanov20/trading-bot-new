@@ -25,19 +25,23 @@ MAX_LOT_SIZE = 2.0             # Absolute upper limit on trade lot size
 # ATR-based settings for dynamic targets:
 # SL = Entry - (ATR * SL_Multiplier)
 # TP = Entry + (ATR * TP_Multiplier)
-USE_ATR_FOR_EXIT = True
+USE_ATR_FOR_EXIT = False
 ATR_PERIOD = 14
 ATR_SL_MULT = 2.0
 ATR_TP_MULT = 4.0
 
 # Fixed values to fall back on if ATR calculations are disabled or fail:
-FIXED_SL_POINTS = 500          # 5.00 points for XAUUSD (assuming 2 decimals)
-FIXED_TP_POINTS = 1000         # 10.00 points for XAUUSD
+FIXED_SL_POINTS = 200          # 2.00 points for XAUUSD (assuming 2 decimals)
+FIXED_TP_POINTS = 200          # 2.00 points for XAUUSD
 
 # --- General System Settings ---
 LOOP_INTERVAL_SECONDS = 15     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
 LOT_SIZE = 0.02                # Lot size for simultaneous orders
-FIXED_TP_PRICE_DIST = 3.0      # Take Profit distance from entry price
+FIXED_TP_PRICE_DIST = 2.0      # Take Profit distance from entry price
 FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price
+
+# --- AI & ML Configuration ---
+RETRAIN_AFTER_N_TRADES = 50    # Retrain XGBoost after this many new trades
+AI_MIN_CONFIDENCE = 0.5        # Minimum confidence score to consider valid signal

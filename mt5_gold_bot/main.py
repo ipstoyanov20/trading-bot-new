@@ -4,6 +4,7 @@ import config
 from logger import log_info, log_error
 from strategy import check_signal
 from trading_engine import initialize_mt5, check_open_positions, place_order
+from trade_tracker import update_trade_history
 
 def run_bot():
     """
@@ -29,8 +30,11 @@ def run_bot():
 
     try:
         while True:
+            # Check for closed trades to update AI history
+            update_trade_history()
+            
             # 1. Fetch signal state
-            signal, atr, last_completed_time = check_signal(config.SYMBOL, config.TIMEFRAME)
+            signal, atr, last_completed_time, confidence, features_dict = check_signal(config.SYMBOL, config.TIMEFRAME)
             
             if last_completed_time is not None:
                 # 2. Lock on startup to the current completed candle to prevent historical trade triggers
@@ -44,23 +48,25 @@ def run_bot():
                     log_info(f"New candle completed: {last_completed_time}")
                     
                     if signal:
-                        log_info(f"SIGNAL DETECTED | Crossover signal found: {signal}")
+                        log_info(f"SIGNAL DETECTED | {signal} | Confidence: {confidence*100:.1f}%")
                         
-                        # 4. Check if position already exists for symbol
-                        if not check_open_positions(config.SYMBOL):
-                            if signal == 'SELL':
-                                order_type = mt5.ORDER_TYPE_SELL
-                                log_info(f"Executing {signal} trade on {config.SYMBOL}...")
-                                
-                                # Order 1
-                                place_order(config.SYMBOL, order_type, atr, 
-                                            volume=config.LOT_SIZE, 
-                                            sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                                            tp_price_dist=config.FIXED_TP_PRICE_DIST)
-                            else:
-                                log_info(f"Signal {signal} ignored. Bot is configured to execute only SELL signals.")
+                        # Apply AI threshold filter
+                        if confidence >= config.AI_MIN_CONFIDENCE:
+                            order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
+                            log_info(f"Executing {signal} trade on {config.SYMBOL}...")
+                            
+                            from ai_model import log_trade_entry
+                            
+                            # Execute Order without checking for existing open positions
+                            result = place_order(config.SYMBOL, order_type, atr, 
+                                        volume=config.LOT_SIZE, 
+                                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                                        
+                            if result:
+                                log_trade_entry(result.order, signal, features_dict)
                         else:
-                            log_info(f"Signal ignored. There is already an active position open for {config.SYMBOL}.")
+                            log_info(f"Signal ignored. AI confidence {confidence*100:.1f}% is below threshold {config.AI_MIN_CONFIDENCE*100:.1f}%")
                     else:
                         log_info("No crossover detected on this completed candle.")
                     

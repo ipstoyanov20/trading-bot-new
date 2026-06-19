@@ -1,2 +1,5 @@
 MetaTrader5
 pandas
+numpy
+scipy
+xgboost

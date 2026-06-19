@@ -40,16 +40,19 @@ def calculate_indicators(df):
 def check_signal(symbol, timeframe):
     """
     Evaluates strategy logic on completed candles to prevent repainting.
-    Returns: (signal, atr, last_completed_candle_time)
+    Returns: (signal, atr, last_completed_candle_time, confidence, features_dict)
         signal: 'BUY', 'SELL', or None
         atr: current ATR value for exits
         last_completed_candle_time: timestamp of the candle the signal was based on
+        confidence: AI prediction score
+        features_dict: features for logging
     """
     df = get_ohlc(symbol, timeframe, count=100)
     if df.empty or len(df) < max(config.EMA_LONG, config.ATR_PERIOD) + 2:
-        return None, None, None
+        return None, None, None, 0.0, None
     
     df = calculate_indicators(df)
+    signal = None
     
     # Live candle is df.iloc[-1] (index -1). Price changes with every tick, so checking here causes repainting.
     # To trade like a professional, we check the last completed candle (index -2) and the preceding one (index -3).
@@ -76,10 +79,18 @@ def check_signal(symbol, timeframe):
     # Crossover detection
     # BUY: Fast EMA was below/equal to slow EMA, and now it is above
     if prev_ema_short <= prev_ema_long and curr_ema_short > curr_ema_long:
-        return 'BUY', atr, last_completed_time
+        signal = 'BUY'
         
     # SELL: Fast EMA was above/equal to slow EMA, and now it is below
-    if prev_ema_short >= prev_ema_long and curr_ema_short < curr_ema_long:
-        return 'SELL', atr, last_completed_time
+    elif prev_ema_short >= prev_ema_long and curr_ema_short < curr_ema_long:
+        signal = 'SELL'
         
-    return None, atr, last_completed_time
+    if signal:
+        # Extract features and get AI confidence
+        from ai_model import get_features_for_signal, predict_signal_confidence
+        features_dict = get_features_for_signal(df, index=-2)
+        confidence = predict_signal_confidence(features_dict, signal)
+        log_info(f"AI Confidence for {signal}: {confidence*100:.1f}%")
+        return signal, atr, last_completed_time, confidence, features_dict
+        
+    return None, atr, last_completed_time, 0.0, None
