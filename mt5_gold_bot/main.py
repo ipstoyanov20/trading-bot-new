@@ -50,25 +50,21 @@ def run_bot():
                     if signal:
                         log_info(f"SIGNAL DETECTED | {signal} | Confidence: {confidence*100:.1f}%")
                         
-                        # Apply AI threshold filter
-                        if confidence >= config.AI_MIN_CONFIDENCE:
-                            order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
-                            log_info(f"Executing {signal} trade on {config.SYMBOL}...")
-                            
-                            from ai_model import log_trade_entry
-                            
-                            # Execute Order without checking for existing open positions
-                            result = place_order(config.SYMBOL, order_type, atr, 
-                                        volume=config.LOT_SIZE, 
-                                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
-                                        
-                            if result:
-                                log_trade_entry(result.order, signal, features_dict)
-                        else:
-                            log_info(f"Signal ignored. AI confidence {confidence*100:.1f}% is below threshold {config.AI_MIN_CONFIDENCE*100:.1f}%")
-                    else:
-                        log_info("No crossover detected on this completed candle.")
+                        order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
+                        log_info(f"Executing {signal} trade on {config.SYMBOL}...")
+                        
+                        from ai_model import log_trade_entry
+                        
+                        # Execute Order without checking for existing open positions
+                        # User constraint: AI confidence should only influence position size/SL/TP if at all,
+                        # but MUST NEVER prevent trade execution.
+                        result = place_order(config.SYMBOL, order_type, atr, 
+                                    volume=config.LOT_SIZE, 
+                                    sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                                    tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                                    
+                        if result:
+                            log_trade_entry(result.order, signal, features_dict)
                     
                     # Lock candle to prevent double processing
                     last_processed_candle = last_completed_time
