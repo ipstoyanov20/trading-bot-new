@@ -23,7 +23,8 @@ def run_bot():
     log_info(f"Symbol: {config.SYMBOL}")
     log_info(f"Timeframe: M15 (15 Minutes)")
     log_info(f"Strategy parameters: EMA{config.EMA_SHORT} / EMA{config.EMA_LONG}")
-    log_info(f"Risk per trade: {config.RISK_PERCENT}% of equity")
+    log_info(f"Fixed Lot Size: {config.LOT_SIZE}")
+    log_info(f"Fixed SL: {config.FIXED_SL_PRICE_DIST}, Fixed TP: {config.FIXED_TP_PRICE_DIST}")
     log_info(f"Loop interval: {config.LOOP_INTERVAL_SECONDS} seconds")
 
     last_processed_candle = None

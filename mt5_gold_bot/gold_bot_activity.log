@@ -265,3 +265,32 @@
 2026-06-16 18:45:09,218 - INFO - INFO | No crossover detected on this completed candle.
 2026-06-16 18:45:14,429 - INFO - INFO | Bot execution paused by user (KeyboardInterrupt).
 2026-06-16 18:45:14,429 - INFO - INFO | MetaTrader 5 connection closed gracefully.
+2026-06-24 09:32:46,996 - INFO - INFO | Initializing Gold Crossover Bot...
+2026-06-24 09:32:47,005 - INFO - INFO | MT5 Connected. Account: 108728960, Balance: 50.0 USD
+2026-06-24 09:32:47,005 - INFO - INFO | Bot successfully started.
+2026-06-24 09:32:47,006 - INFO - INFO | Symbol: XAUUSD
+2026-06-24 09:32:47,006 - INFO - INFO | Timeframe: M15 (15 Minutes)
+2026-06-24 09:32:47,006 - INFO - INFO | Strategy parameters: EMA9 / EMA21
+2026-06-24 09:32:47,006 - INFO - INFO | Fixed Lot Size: 0.02
+2026-06-24 09:32:47,006 - INFO - INFO | Fixed SL: 2.0, Fixed TP: 2.0
+2026-06-24 09:32:47,006 - INFO - INFO | Loop interval: 15 seconds
+2026-06-24 09:32:47,022 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:32:47,022 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:32:47,022 - INFO - INFO | Startup check complete. Signal tracking initialized at candle 2026-06-24 09:15:00.
+2026-06-24 09:32:47,023 - INFO - INFO | Waiting for the next candle completion to check for crossovers...
+2026-06-24 09:33:02,027 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:33:02,027 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:33:17,031 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:33:17,032 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:33:32,036 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:33:32,036 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:33:47,041 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:33:47,041 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:34:02,045 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:34:02,046 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:34:17,050 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:34:17,051 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:34:32,054 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:34:32,055 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
+2026-06-24 09:34:47,059 - INFO - INFO | STATUS | XAUUSD | EMA9 is BELOW EMA21 (EMA9: 4078.129, EMA21: 4078.176) | Last Completed Candle Time: 2026-06-24 09:15:00
+2026-06-24 09:34:47,060 - INFO - INFO | Trend Fallback Signal: SELL (EMA Short < EMA Long)
