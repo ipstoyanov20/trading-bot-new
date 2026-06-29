@@ -19,20 +19,23 @@ def run_bot():
     log_info("Executing startup AI-driven test trade...")
     startup_signal, startup_atr, _, startup_confidence, startup_features = check_signal(config.SYMBOL, config.TIMEFRAME)
     if startup_signal:
-        log_info(f"STARTUP SIGNAL DETECTED | {startup_signal} | Confidence: {startup_confidence*100:.1f}%")
-        startup_order_type = mt5.ORDER_TYPE_BUY if startup_signal == 'BUY' else mt5.ORDER_TYPE_SELL
-        
-        from ai_model import log_trade_entry
-        result = place_order(config.SYMBOL, startup_order_type, startup_atr, 
-                    volume=config.LOT_SIZE, 
-                    sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                    tp_price_dist=config.FIXED_TP_PRICE_DIST)
-                    
-        if result:
-            log_trade_entry(result.order, startup_signal, startup_features)
-            log_info("Startup test trade executed successfully.")
+        if startup_confidence < config.AI_MIN_CONFIDENCE:
+            log_info(f"Startup trade skipped: AI Confidence ({startup_confidence*100:.1f}%) is below minimum threshold ({config.AI_MIN_CONFIDENCE*100:.1f}%).")
         else:
-            log_error("Startup test trade failed to execute.")
+            log_info(f"STARTUP SIGNAL DETECTED | {startup_signal} | Confidence: {startup_confidence*100:.1f}%")
+            startup_order_type = mt5.ORDER_TYPE_BUY if startup_signal == 'BUY' else mt5.ORDER_TYPE_SELL
+            
+            from ai_model import log_trade_entry
+            result = place_order(config.SYMBOL, startup_order_type, startup_atr, 
+                        volume=config.LOT_SIZE, 
+                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                        
+            if result:
+                log_trade_entry(result.order, startup_signal, startup_features)
+                log_info("Startup test trade executed successfully.")
+            else:
+                log_error("Startup test trade failed to execute.")
     # ---------------------------------
     log_info(f"Bot successfully started.")
     log_info(f"Symbol: {config.SYMBOL}")
@@ -64,23 +67,23 @@ def run_bot():
                     log_info(f"New candle completed: {last_completed_time}")
                     
                     if signal:
-                        log_info(f"SIGNAL DETECTED | {signal} | Confidence: {confidence*100:.1f}%")
-                        
-                        order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
-                        log_info(f"Executing {signal} trade on {config.SYMBOL}...")
-                        
-                        from ai_model import log_trade_entry
-                        
-                        # Execute Order without checking for existing open positions
-                        # User constraint: AI confidence should only influence position size/SL/TP if at all,
-                        # but MUST NEVER prevent trade execution.
-                        result = place_order(config.SYMBOL, order_type, atr, 
-                                    volume=config.LOT_SIZE, 
-                                    sl_price_dist=config.FIXED_SL_PRICE_DIST, 
-                                    tp_price_dist=config.FIXED_TP_PRICE_DIST)
-                                    
-                        if result:
-                            log_trade_entry(result.order, signal, features_dict)
+                        if confidence < config.AI_MIN_CONFIDENCE:
+                            log_info(f"Trade skipped: AI Confidence ({confidence*100:.1f}%) is below minimum threshold ({config.AI_MIN_CONFIDENCE*100:.1f}%).")
+                        else:
+                            log_info(f"SIGNAL DETECTED | {signal} | Confidence: {confidence*100:.1f}%")
+                            
+                            order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
+                            log_info(f"Executing {signal} trade on {config.SYMBOL}...")
+                            
+                            from ai_model import log_trade_entry
+                            
+                            result = place_order(config.SYMBOL, order_type, atr, 
+                                        volume=config.LOT_SIZE, 
+                                        sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                                        tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                                        
+                            if result:
+                                log_trade_entry(result.order, signal, features_dict)
                     
                     # Lock candle to prevent double processing
                     last_processed_candle = last_completed_time

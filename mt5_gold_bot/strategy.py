@@ -93,36 +93,5 @@ def check_signal(symbol, timeframe):
         log_info(f"EMA Crossover Signal: {signal} | AI Confidence: {confidence*100:.1f}%")
         return signal, atr, last_completed_time, confidence, features_dict
         
-    # No crossover detected -> Fallback 1: AI Prediction
-    from ai_model import get_features_for_signal, predict_signal_confidence
-    features_dict = get_features_for_signal(df, index=-2)
-    buy_conf = predict_signal_confidence(features_dict, 'BUY')
-    sell_conf = predict_signal_confidence(features_dict, 'SELL')
-    
-    if buy_conf > sell_conf:
-        signal = 'BUY'
-        confidence = buy_conf
-        log_info(f"AI Prediction Signal: {signal} | Confidence: {confidence*100:.1f}% (Buy: {buy_conf*100:.1f}%, Sell: {sell_conf*100:.1f}%)")
-    elif sell_conf > buy_conf:
-        signal = 'SELL'
-        confidence = sell_conf
-        log_info(f"AI Prediction Signal: {signal} | Confidence: {confidence*100:.1f}% (Buy: {buy_conf*100:.1f}%, Sell: {sell_conf*100:.1f}%)")
-    else:
-        # Fallback 2: Trend-following fallback
-        if curr_ema_short > curr_ema_long:
-            signal = 'BUY'
-            log_info(f"Trend Fallback Signal: {signal} (EMA Short > EMA Long)")
-        elif curr_ema_short < curr_ema_long:
-            signal = 'SELL'
-            log_info(f"Trend Fallback Signal: {signal} (EMA Short < EMA Long)")
-        else:
-            # Fallback 3: Last-resort (e.g. recent close vs open)
-            if last_completed_candle['close'] >= last_completed_candle['open']:
-                signal = 'BUY'
-                log_info(f"Last-Resort Signal: {signal} (Green Candle)")
-            else:
-                signal = 'SELL'
-                log_info(f"Last-Resort Signal: {signal} (Red Candle)")
-        confidence = buy_conf # Use the tie confidence
-        
-    return signal, atr, last_completed_time, confidence, features_dict
+    # No crossover detected -> Return None for signal to prevent trades
+    return None, atr, last_completed_time, 0.0, None

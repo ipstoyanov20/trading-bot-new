@@ -9,7 +9,7 @@ ACCOUNT_SERVER = ""            # Broker Server Name (e.g. "MetaQuotes-Demo")
 
 # --- Trading Strategy Settings ---
 SYMBOL = "XAUUSD"              # Gold Symbol (check if your broker uses XAUUSDm, XAUUSD.r, etc.)
-TIMEFRAME = mt5.TIMEFRAME_M5   # Timeframe to analyze candles (5 Minutes for more frequent trades)
+TIMEFRAME = mt5.TIMEFRAME_M30  # Timeframe to analyze candles (30 Minutes)
 MAGIC_NUMBER = 20260616        # Unique bot identifier to track its own trades
 DEVIATION = 20                 # Max slippage allowed in points
 
@@ -44,4 +44,4 @@ FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price (keep losse
 
 # --- AI & ML Configuration ---
 RETRAIN_AFTER_N_TRADES = 50    # Retrain XGBoost after this many new trades
-AI_MIN_CONFIDENCE = 0.5        # Minimum confidence score to consider valid signal
+AI_MIN_CONFIDENCE = 0.55       # Minimum confidence score to consider valid signal (e.g. 55%)
