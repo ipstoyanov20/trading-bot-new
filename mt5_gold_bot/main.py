@@ -15,10 +15,25 @@ def run_bot():
         log_error("Could not initialize MT5 connection. Exiting.")
         return
 
-    # --- TEST BUY ORDER ON STARTUP ---
-    # Removed as per user request
+    # --- TEST ORDER ON STARTUP (AI MODEL DRIVEN) ---
+    log_info("Executing startup AI-driven test trade...")
+    startup_signal, startup_atr, _, startup_confidence, startup_features = check_signal(config.SYMBOL, config.TIMEFRAME)
+    if startup_signal:
+        log_info(f"STARTUP SIGNAL DETECTED | {startup_signal} | Confidence: {startup_confidence*100:.1f}%")
+        startup_order_type = mt5.ORDER_TYPE_BUY if startup_signal == 'BUY' else mt5.ORDER_TYPE_SELL
+        
+        from ai_model import log_trade_entry
+        result = place_order(config.SYMBOL, startup_order_type, startup_atr, 
+                    volume=config.LOT_SIZE, 
+                    sl_price_dist=config.FIXED_SL_PRICE_DIST, 
+                    tp_price_dist=config.FIXED_TP_PRICE_DIST)
+                    
+        if result:
+            log_trade_entry(result.order, startup_signal, startup_features)
+            log_info("Startup test trade executed successfully.")
+        else:
+            log_error("Startup test trade failed to execute.")
     # ---------------------------------
-
     log_info(f"Bot successfully started.")
     log_info(f"Symbol: {config.SYMBOL}")
     log_info(f"Timeframe: M15 (15 Minutes)")

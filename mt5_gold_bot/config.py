@@ -9,7 +9,7 @@ ACCOUNT_SERVER = ""            # Broker Server Name (e.g. "MetaQuotes-Demo")
 
 # --- Trading Strategy Settings ---
 SYMBOL = "XAUUSD"              # Gold Symbol (check if your broker uses XAUUSDm, XAUUSD.r, etc.)
-TIMEFRAME = mt5.TIMEFRAME_M15  # Timeframe to analyze candles (15 Minutes)
+TIMEFRAME = mt5.TIMEFRAME_M5   # Timeframe to analyze candles (5 Minutes for more frequent trades)
 MAGIC_NUMBER = 20260616        # Unique bot identifier to track its own trades
 DEVIATION = 20                 # Max slippage allowed in points
 
@@ -18,7 +18,7 @@ EMA_SHORT = 9                  # Fast EMA span
 EMA_LONG = 21                  # Slow EMA span
 
 # --- Risk Management ---
-RISK_PERCENT = 1.0             # Account equity percentage to risk per trade (e.g. 1.0%)
+RISK_PERCENT = 10.0            # Account equity percentage to risk per trade (aggressive for $50 account)
 MAX_LOT_SIZE = 2.0             # Absolute upper limit on trade lot size
 
 # --- Stop Loss (SL) & Take Profit (TP) ---
@@ -38,9 +38,9 @@ FIXED_TP_POINTS = 200          # 2.00 points for XAUUSD
 LOOP_INTERVAL_SECONDS = 15     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
-LOT_SIZE = 0.01                # Lot size for simultaneous orders
-FIXED_TP_PRICE_DIST = 2.0      # Take Profit distance from entry price
-FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price
+LOT_SIZE = 0.02                # Lot size for simultaneous orders (aggressive)
+FIXED_TP_PRICE_DIST = 5.0      # Take Profit distance from entry price (aim for $5 move)
+FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price (keep losses small)
 
 # --- AI & ML Configuration ---
 RETRAIN_AFTER_N_TRADES = 50    # Retrain XGBoost after this many new trades
