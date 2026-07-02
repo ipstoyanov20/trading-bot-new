@@ -177,6 +177,17 @@ def place_order(symbol, order_type, atr=None, volume=None, sl_price_dist=None, t
         
     filling_mode = get_filling_type(symbol)
     
+    # We will dynamically adjust lots to fit free margin if needed
+    account_info = mt5.account_info()
+    free_margin = account_info.margin_free if account_info is not None else 50.0
+    
+    step = symbol_info.volume_step
+    min_vol = symbol_info.volume_min
+    
+    # Ensure lots is rounded properly
+    lots = round(round(lots / step) * step, 2)
+    lots = max(min_vol, min(symbol_info.volume_max, lots))
+    
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
@@ -186,18 +197,30 @@ def place_order(symbol, order_type, atr=None, volume=None, sl_price_dist=None, t
         "sl": float(round(sl, symbol_info.digits)),
         "tp": float(round(tp, symbol_info.digits)),
         "magic": config.MAGIC_NUMBER,
-        "comment": "Gold Crossover Bot",
+        "comment": "Gold AI Bot",
         "deviation": config.DEVIATION,
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode,
     }
     
-    # Validate order parameters before transmission
-    check_result = mt5.order_check(request)
-    if check_result.retcode not in (0, mt5.TRADE_RETCODE_DONE):
-        log_error(f"MT5 pre-order validation failed for {symbol}: {check_result.comment} (Code: {check_result.retcode})")
+    # Validate and scale down if margin is insufficient
+    while lots >= min_vol:
+        request["volume"] = float(lots)
+        check_result = mt5.order_check(request)
+        
+        # Check if order validation succeeded and margin is within limits
+        if check_result.retcode in (0, mt5.TRADE_RETCODE_DONE) and check_result.margin <= free_margin:
+            break
+            
+        log_info(f"Margin check failed for {lots} lots (Required: {check_result.margin}, Free: {free_margin}). Scaling down...")
+        lots = round(lots - step, 2)
+        
+    if lots < min_vol:
+        log_error(f"Cannot place trade on {symbol}: Insufficient margin even for minimum lot {min_vol}.")
         return None
         
+    log_info(f"Placing trade: {lots} lots on {symbol}...")
+    
     # Execute the trade
     result = mt5.order_send(request)
     action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
@@ -212,3 +235,46 @@ def place_order(symbol, order_type, atr=None, volume=None, sl_price_dist=None, t
     else:
         log_trade(symbol, action_str, lots, price, sl, tp, f"FAILED: Code {result.retcode} ({result.comment})")
         return None
+
+def close_all_bot_positions(symbol):
+    """
+    Closes all active positions for the symbol that were opened by this bot (magic number check).
+    """
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None or len(positions) == 0:
+        return
+        
+    for pos in positions:
+        if pos.magic == config.MAGIC_NUMBER:
+            ticket = pos.ticket
+            order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+            
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                log_error(f"Failed to get tick to close position {ticket}")
+                continue
+                
+            price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
+            
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": pos.volume,
+                "type": order_type,
+                "position": ticket,
+                "price": price,
+                "deviation": config.DEVIATION,
+                "magic": config.MAGIC_NUMBER,
+                "comment": "Close Gold Bot Position",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": get_filling_type(symbol),
+            }
+            
+            result = mt5.order_send(request)
+            if result is None:
+                log_error(f"Failed to close position {ticket}: order_send returned None")
+            elif result.retcode != mt5.TRADE_RETCODE_DONE:
+                log_error(f"Failed to close position {ticket}: {result.comment} (Code: {result.retcode})")
+            else:
+                log_info(f"Successfully closed position {ticket} (Profit: {pos.profit})")
+

@@ -18,8 +18,10 @@ EMA_SHORT = 9                  # Fast EMA span
 EMA_LONG = 21                  # Slow EMA span
 
 # --- Risk Management ---
-RISK_PERCENT = 10.0            # Account equity percentage to risk per trade (aggressive for $50 account)
+RISK_PERCENT = 30.0            # Account equity percentage to risk per trade (highly aggressive for $50 account)
 MAX_LOT_SIZE = 2.0             # Absolute upper limit on trade lot size
+LOT_SIZE = 0.10                # Flat fallback lot size for maximum risk trading
+CLOSE_POSITION_ON_CANDLE_CLOSE = True  # Automatically close position at the end of the 30m candle
 
 # --- Stop Loss (SL) & Take Profit (TP) ---
 # ATR-based settings for dynamic targets:
@@ -31,17 +33,18 @@ ATR_SL_MULT = 2.0
 ATR_TP_MULT = 4.0
 
 # Fixed values to fall back on if ATR calculations are disabled or fail:
-FIXED_SL_POINTS = 200          # 2.00 points for XAUUSD (assuming 2 decimals)
-FIXED_TP_POINTS = 200          # 2.00 points for XAUUSD
+# Since we close at the end of 30 minutes, SL/TP are safety nets.
+FIXED_SL_POINTS = 500          # 5.00 points for XAUUSD (assuming 2 decimals)
+FIXED_TP_POINTS = 1000         # 10.00 points for XAUUSD
 
 # --- General System Settings ---
-LOOP_INTERVAL_SECONDS = 15     # Interval to query MT5 for new candle updates
+LOOP_INTERVAL_SECONDS = 10     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
-LOT_SIZE = 0.02                # Lot size for simultaneous orders (aggressive)
-FIXED_TP_PRICE_DIST = 5.0      # Take Profit distance from entry price (aim for $5 move)
-FIXED_SL_PRICE_DIST = 2.0      # Stop Loss distance from entry price (keep losses small)
+FIXED_TP_PRICE_DIST = 10.0     # Take Profit distance from entry price
+FIXED_SL_PRICE_DIST = 5.0      # Stop Loss distance from entry price
 
 # --- AI & ML Configuration ---
-RETRAIN_AFTER_N_TRADES = 50    # Retrain XGBoost after this many new trades
-AI_MIN_CONFIDENCE = 0.55       # Minimum confidence score to consider valid signal (e.g. 55%)
+RETRAIN_AFTER_N_TRADES = 10    # Retrain XGBoost after this many new trades (more frequent learning)
+AI_MIN_CONFIDENCE = 0.50       # Minimum confidence score to trade (0.50 means taking any trade direction AI favors)
+FIREBASE_CREDENTIALS_PATH = "firebase_credentials.json"

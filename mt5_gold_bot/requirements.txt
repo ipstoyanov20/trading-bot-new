@@ -3,3 +3,4 @@ pandas
 numpy
 scipy
 xgboost
+firebase-admin

@@ -5,8 +5,8 @@ import xgboost as xgb
 from logger import log_info, log_error
 import config
 
-MODEL_PATH = "xgboost_model.json"
-HISTORY_PATH = "trade_history.csv"
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xgboost_model.json")
+HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.csv")
 
 def get_features_for_signal(df, index=-2):
     """
@@ -32,13 +32,15 @@ def get_features_for_signal(df, index=-2):
 
 def train_model():
     """
-    Trains the XGBoost model using the trade history CSV.
+    Trains the XGBoost model using the trade history (from Firestore or local fallback).
     """
-    if not os.path.exists(HISTORY_PATH):
+    from firebase_logger import fetch_historical_trades
+    
+    df = fetch_historical_trades()
+    if df.empty:
         log_info("No trade history available for AI training.")
         return False
         
-    df = pd.read_csv(HISTORY_PATH)
     if len(df) < config.RETRAIN_AFTER_N_TRADES:
         log_info(f"Not enough data to train AI model yet. Found {len(df)} trades, need {config.RETRAIN_AFTER_N_TRADES}.")
         return False
@@ -58,8 +60,9 @@ def train_model():
         log_error(f"Missing feature columns in trade history: {missing_cols}")
         return False
         
-    X = df[feature_cols]
-    y = df['win']
+    # Standardize data types
+    X = df[feature_cols].astype(float)
+    y = df['win'].astype(int)
     
     try:
         model = xgb.XGBClassifier(
@@ -102,7 +105,7 @@ def predict_signal_confidence(features_dict, signal):
             'signal_type': [signal_type]
         }
         
-        X = pd.DataFrame(input_data)
+        X = pd.DataFrame(input_data).astype(float)
         
         # Predict probability of class 1 (win)
         prob = model.predict_proba(X)[0][1]
@@ -114,25 +117,8 @@ def predict_signal_confidence(features_dict, signal):
 
 def log_trade_entry(ticket, signal, features_dict):
     """
-    Temporarily stores the entry features for a trade, to be matched with outcomes later.
+    Wrapper to save the trade entry via firebase_logger.
     """
-    entry_log = "active_trades.csv"
-    signal_type = 1 if signal == 'BUY' else 0
-    
-    row = {
-        'ticket': ticket,
-        'signal_type': signal_type,
-        'ema_distance': features_dict.get('ema_distance', 0),
-        'atr': features_dict.get('atr', 0),
-        'tick_volume': features_dict.get('tick_volume', 0),
-        'body_size': features_dict.get('body_size', 0),
-        'wick_upper': features_dict.get('wick_upper', 0),
-        'wick_lower': features_dict.get('wick_lower', 0),
-    }
-    
-    df_row = pd.DataFrame([row])
-    
-    if os.path.exists(entry_log):
-        df_row.to_csv(entry_log, mode='a', header=False, index=False)
-    else:
-        df_row.to_csv(entry_log, mode='w', header=True, index=False)
+    from firebase_logger import save_trade_entry
+    save_trade_entry(ticket, signal, 0.0, config.LOT_SIZE, 0.5, features_dict)
+
