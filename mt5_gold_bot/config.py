@@ -8,8 +8,8 @@ ACCOUNT_PASSWORD = ""          # Account Password
 ACCOUNT_SERVER = ""            # Broker Server Name (e.g. "MetaQuotes-Demo")
 
 # --- Trading Strategy Settings ---
-SYMBOL = "XAUUSD"              # Gold Symbol (check if your broker uses XAUUSDm, XAUUSD.r, etc.)
-TIMEFRAME = mt5.TIMEFRAME_M30  # Timeframe to analyze candles (30 Minutes)
+SYMBOL = "EURUSD"              # EURUSD Symbol
+TIMEFRAME = mt5.TIMEFRAME_M15  # Timeframe to analyze candles (15 Minutes)
 MAGIC_NUMBER = 20260616        # Unique bot identifier to track its own trades
 DEVIATION = 20                 # Max slippage allowed in points
 
@@ -21,7 +21,7 @@ EMA_LONG = 21                  # Slow EMA span
 RISK_PERCENT = 30.0            # Account equity percentage to risk per trade (highly aggressive for $50 account)
 MAX_LOT_SIZE = 2.0             # Absolute upper limit on trade lot size
 LOT_SIZE = 0.10                # Flat fallback lot size for maximum risk trading
-CLOSE_POSITION_ON_CANDLE_CLOSE = True  # Automatically close position at the end of the 30m candle
+CLOSE_POSITION_ON_CANDLE_CLOSE = True  # Automatically close position at the end of the 15m candle
 
 # --- Stop Loss (SL) & Take Profit (TP) ---
 # ATR-based settings for dynamic targets:
@@ -33,18 +33,19 @@ ATR_SL_MULT = 2.0
 ATR_TP_MULT = 4.0
 
 # Fixed values to fall back on if ATR calculations are disabled or fail:
-# Since we close at the end of 30 minutes, SL/TP are safety nets.
-FIXED_SL_POINTS = 500          # 5.00 points for XAUUSD (assuming 2 decimals)
-FIXED_TP_POINTS = 1000         # 10.00 points for XAUUSD
+# Since we close at the end of 15 minutes, SL/TP are safety nets.
+FIXED_SL_POINTS = 100          # 10 pips for EURUSD (assuming 5 decimals)
+FIXED_TP_POINTS = 200          # 20 pips for EURUSD
 
 # --- General System Settings ---
 LOOP_INTERVAL_SECONDS = 10     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
-FIXED_TP_PRICE_DIST = 10.0     # Take Profit distance from entry price
-FIXED_SL_PRICE_DIST = 5.0      # Stop Loss distance from entry price
+FIXED_TP_PRICE_DIST = 0.0020   # Take Profit distance from entry price (20 pips)
+FIXED_SL_PRICE_DIST = 0.0010   # Stop Loss distance from entry price (10 pips)
 
 # --- AI & ML Configuration ---
 RETRAIN_AFTER_N_TRADES = 10    # Retrain XGBoost after this many new trades (more frequent learning)
 AI_MIN_CONFIDENCE = 0.50       # Minimum confidence score to trade (0.50 means taking any trade direction AI favors)
 FIREBASE_CREDENTIALS_PATH = "firebase_credentials.json"
+

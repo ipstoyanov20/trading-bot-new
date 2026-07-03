@@ -43,7 +43,7 @@ def run_bot():
     # ---------------------------------
     log_info(f"Bot successfully started.")
     log_info(f"Symbol: {config.SYMBOL}")
-    log_info(f"Timeframe: M30 (30 Minutes)")
+    log_info(f"Timeframe: M15 (15 Minutes)")
     log_info(f"Strategy parameters: EMA{config.EMA_SHORT} / EMA{config.EMA_LONG}")
     log_info(f"Fixed Lot Size: {config.LOT_SIZE}")
     log_info(f"Fixed SL Dist: {config.FIXED_SL_PRICE_DIST}, Fixed TP Dist: {config.FIXED_TP_PRICE_DIST}")
@@ -63,13 +63,14 @@ def run_bot():
                     log_info(f"Startup check complete. Signal tracking initialized at candle {last_completed_time}.")
                     log_info("Waiting for the next candle completion to check for predictions...")
                 
-                # 3. Detect when a new candle has completed (runs every 30 minutes)
+                # 3. Detect when a new candle has completed (runs every 15 minutes)
                 elif last_completed_time != last_processed_candle:
-                    log_info(f"New 30m candle completed at: {last_completed_time}")
+                    log_info(f"New 15m candle completed at: {last_completed_time}")
                     
                     # A. Close active trades if config is set
                     if config.CLOSE_POSITION_ON_CANDLE_CLOSE:
-                        log_info("Closing previous 30m positions...")
+                        log_info("Closing previous 15m positions...")
+
                         close_all_bot_positions(config.SYMBOL)
                     
                     # B. Check for closed trades to update AI history/Firestore
