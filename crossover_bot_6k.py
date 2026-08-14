@@ -36,10 +36,24 @@ def run_bot():
 
     # --- TEST ORDER ---
     logger.info("--- ATTEMPTING IMMEDIATE TEST ORDER ---")
-    test_result = place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=2.0)
-    logger.info(f"Test order result: {test_result}")
-    if test_result is None:
-        logger.error(f"Test order failed! MT5 Last Error: {mt5.last_error()}")
+    try:
+        test_result = place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=2.0)
+        logger.info(f"Test order result object: {test_result}")
+        if test_result is None:
+            err = mt5.last_error()
+            logger.error(f"❌ Test order failed to send! MT5 Last Error Code: {err}")
+            if err[0] == 4756:
+                logger.error("Error 4756: Trade request sending failed (Check if Algo Trading is ON or Market is open)")
+            elif err[0] == 10015:
+                logger.error("Error 10015: Invalid price / Invalid Stops (SL/TP too close or wrong format)")
+            elif err[0] == 10014:
+                logger.error("Error 10014: Invalid volume (Check lot size limits)")
+            elif err[0] == 10016:
+                logger.error("Error 10016: Invalid Stops (SL or TP distance is too small)")
+        else:
+            logger.info("✅ Test order executed successfully.")
+    except Exception as e:
+        logger.error(f"❌ A Python error occurred during the test order: {e}", exc_info=True)
     logger.info("---------------------------------------")
 
     try:
