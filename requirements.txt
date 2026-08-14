@@ -1,0 +1,9 @@
+alpaca_trade_api==3.2.0
+cryptography==50.0.0
+firebase_admin==7.5.0
+MetaTrader5==5.0.6090
+numpy==2.5.2
+pandas==3.0.5
+Requests==2.34.2
+telethon==1.42.0
+xgboost==3.4.0
