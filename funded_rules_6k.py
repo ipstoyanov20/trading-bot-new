@@ -41,8 +41,10 @@ class FundedAccountRules6k:
         daily_pnl = 0.0
         if history_deals:
             for deal in history_deals:
-                # Include closed trades profit, swaps, commissions
-                daily_pnl += deal.profit + deal.swap + deal.commission
+                # Ignore balance operations (deposits/withdrawals)
+                if deal.type == mt5.DEAL_TYPE_BUY or deal.type == mt5.DEAL_TYPE_SELL:
+                    # Include closed trades profit, swaps, commissions
+                    daily_pnl += deal.profit + deal.swap + deal.commission
                 
         # Add current floating PnL
         daily_pnl += account_info.profit

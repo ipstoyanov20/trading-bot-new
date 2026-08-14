@@ -95,14 +95,17 @@ def place_order(symbol, order_type, atr=None):
     General purpose function to place a Market Order.
     Includes validation, margin checks, and logging.
     """
+    print(f"--- DIAGNOSTICS: Starting place_order for {symbol} ---")
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
+            print(f"--- DIAGNOSTICS: Failed to select symbol {symbol} ---")
             log_error(f"Failed to select symbol {symbol}")
             return
             
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
+        print(f"--- DIAGNOSTICS: Failed to get ticks for {symbol} ---")
         log_error(f"Failed to get ticks for {symbol}")
         return
         
@@ -124,17 +127,31 @@ def place_order(symbol, order_type, atr=None):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
     
+    print(f"--- DIAGNOSTICS: Built Request: {request} ---")
+    
     # Check if order is valid before sending
     check_res = mt5.order_check(request)
-    if check_res.retcode != mt5.TRADE_RETCODE_DONE:
+    print(f"--- DIAGNOSTICS: order_check returned: {check_res} ---")
+    
+    if check_res is None:
+        print(f"--- DIAGNOSTICS: order_check returned None! MT5 Last Error: {mt5.last_error()} ---")
+        return None
+        
+    # order_check returns 0 for success, not 10009 (TRADE_RETCODE_DONE)
+    if check_res.retcode != 0:
+        print(f"--- DIAGNOSTICS: order_check failed! Retcode: {check_res.retcode}, Comment: {check_res.comment} ---")
         log_error(f"Order check failed for {symbol}: {check_res.comment}")
-        return
+        return None
 
+    print("--- DIAGNOSTICS: Sending order... ---")
     # Execute the trade
     result = mt5.order_send(request)
+    print(f"--- DIAGNOSTICS: order_send returned: {result} ---")
+    
     if result is None:
+        print(f"--- DIAGNOSTICS: order_send returned None! MT5 Last Error: {mt5.last_error()} ---")
         log_error(f"Order send failed for {symbol}: {mt5.last_error()}")
-        return
+        return None
 
     action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     # 10009 is DONE, 10008 is PLACED. Both are successful.
@@ -142,6 +159,7 @@ def place_order(symbol, order_type, atr=None):
         log_trade(symbol, action_str, lots, price, sl, tp, "SUCCESS")
         return result
     else:
+        print(f"--- DIAGNOSTICS: order_send returned failed retcode! Retcode: {result.retcode}, Comment: {result.comment} ---")
         log_trade(symbol, action_str, lots, price, sl, tp, f"FAILED (Code {result.retcode}): {result.comment}")
         return None
 
