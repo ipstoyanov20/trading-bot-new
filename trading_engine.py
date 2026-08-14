@@ -137,11 +137,12 @@ def place_order(symbol, order_type, atr=None):
         return
 
     action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-    if result.retcode == mt5.TRADE_RETCODE_DONE:
+    # 10009 is DONE, 10008 is PLACED. Both are successful.
+    if result.retcode == mt5.TRADE_RETCODE_DONE or result.retcode == 10008:
         log_trade(symbol, action_str, lots, price, sl, tp, "SUCCESS")
         return result
     else:
-        log_trade(symbol, action_str, lots, price, sl, tp, f"FAILED: {result.comment}")
+        log_trade(symbol, action_str, lots, price, sl, tp, f"FAILED (Code {result.retcode}): {result.comment}")
         return None
 
 def execute_signal(signal_data):
