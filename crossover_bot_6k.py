@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # User Configurable Settings (Defaults)
-SYMBOL = "XAUUSD"          # Default pair to trade
+SYMBOL = "BTCUSD"          # Default pair to trade
 TIMEFRAME = mt5.TIMEFRAME_M15 # Default timeframe (15 minutes)
 SLEEP_INTERVAL = 60        # How often to check for signals (in seconds)
 
