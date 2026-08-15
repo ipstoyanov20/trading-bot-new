@@ -14,7 +14,7 @@ class FundedAccountRules100k:
         self.STARTING_BALANCE = 100000.0
         
         # Challenge Rules
-        self.PROFIT_TARGET = 8000.0    # 8% of 100k
+        self.PROFIT_TARGET = 100000.0  # Massive target so the bot doesn't stop
         self.MAX_LOSS_LIMIT = 10000.0  # 10% of 100k
         self.DAILY_LOSS_LIMIT = 5000.0 # 5% of 100k
         
