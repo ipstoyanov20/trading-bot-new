@@ -37,7 +37,8 @@ def run_bot():
     # --- TEST ORDER ---
     logger.info("--- ATTEMPTING IMMEDIATE TEST ORDER ---")
     try:
-        test_result = place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=2.0)
+        # We increase the test ATR to 500.0 because Bitcoin requires a much wider stop loss than Gold (2.0 is too tight)
+        test_result = place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=500.0)
         logger.info(f"Test order result object: {test_result}")
         if test_result is None:
             err = mt5.last_error()
