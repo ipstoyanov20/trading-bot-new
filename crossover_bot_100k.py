@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # User Configurable Settings (Defaults)
 SYMBOL = "BTCUSD"          # Default pair to trade
 TIMEFRAME = mt5.TIMEFRAME_M15 # Default timeframe (15 minutes)
-SLEEP_INTERVAL = 60        # How often to check for signals (in seconds)
+SLEEP_INTERVAL = 900       # How often to check for signals (900 seconds = 15 minutes)
 
 def run_bot():
     """Main loop for the $100K Funded Account Crossover Bot"""
