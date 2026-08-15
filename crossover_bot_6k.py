@@ -34,29 +34,6 @@ def run_bot():
     config.RISK_PERCENT = rules_checker.MAX_RISK_PERCENT
     logger.info(f"Risk configured to strict max {config.RISK_PERCENT}% per trade.")
 
-    # --- TEST ORDER ---
-    logger.info("--- ATTEMPTING IMMEDIATE TEST ORDER ---")
-    try:
-        # We increase the test ATR to 500.0 because Bitcoin requires a much wider stop loss than Gold (2.0 is too tight)
-        test_result = place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=500.0)
-        logger.info(f"Test order result object: {test_result}")
-        if test_result is None:
-            err = mt5.last_error()
-            logger.error(f"❌ Test order failed to send! MT5 Last Error Code: {err}")
-            if err[0] == 4756:
-                logger.error("Error 4756: Trade request sending failed (Check if Algo Trading is ON or Market is open)")
-            elif err[0] == 10015:
-                logger.error("Error 10015: Invalid price / Invalid Stops (SL/TP too close or wrong format)")
-            elif err[0] == 10014:
-                logger.error("Error 10014: Invalid volume (Check lot size limits)")
-            elif err[0] == 10016:
-                logger.error("Error 10016: Invalid Stops (SL or TP distance is too small)")
-        else:
-            logger.info("✅ Test order executed successfully.")
-    except Exception as e:
-        logger.error(f"❌ A Python error occurred during the test order: {e}", exc_info=True)
-    logger.info("---------------------------------------")
-
     try:
         while True:
             logger.info("--- New Check Cycle ---")
@@ -65,9 +42,9 @@ def run_bot():
             status = rules_checker.check_all_rules()
             
             if not status["can_trade"]:
-                logger.warning("TRADING HALTED by Rules Engine... BUT IGNORED FOR TESTING. Proceeding with trade.")
-                # time.sleep(300) # Sleep longer if we're halted
-                # continue
+                logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes before next check...")
+                time.sleep(300) # Sleep longer if we're halted
+                continue
                 
             if status["profit_target_reached"]:
                 logger.info("Profit Target Reached! Bot will stand down and not take new trades.")

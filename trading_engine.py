@@ -154,8 +154,8 @@ def place_order(symbol, order_type, atr=None):
         return None
 
     action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-    # 10009 is DONE, 10008 is PLACED. Both are successful.
-    if result.retcode == mt5.TRADE_RETCODE_DONE or result.retcode == 10008:
+    # 10009 is DONE, 10008 is PLACED, 0 is sometimes returned by brokers/API for success.
+    if result.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
         log_trade(symbol, action_str, lots, price, sl, tp, "SUCCESS")
         return result
     else:
