@@ -49,8 +49,8 @@ FIXED_TP_POINTS = 1000  # 10.00 points for XAUUSD
 
 # ATR-Based Settings (Used if USE_ATR_FOR_EXIT is True)
 ATR_PERIOD = 14         # Period for the ATR indicator calculation
-ATR_SL_MULT = 2.0       # Multiplier for the SL distance (e.g., SL = entry - 2*ATR)
-ATR_TP_MULT = 4.0       # Multiplier for the TP distance (e.g., TP = entry + 4*ATR)
+ATR_SL_MULT = 0.5       # Multiplier for the SL distance (Much tighter now)
+ATR_TP_MULT = 1.0       # Multiplier for the TP distance (Tighter quick scalp target)
 
 # --- Revolut X (Crypto Exchange) Configuration ---
 # Generate these in the Revolut X web interface
