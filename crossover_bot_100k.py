@@ -39,9 +39,6 @@ def run_bot():
                 if pnl >= config.PORTFOLIO_TP_USD:
                     logger.info(f"💰 Portfolio TP Reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
                     close_all_positions(SYMBOL)
-                elif pnl <= -config.PORTFOLIO_SL_USD:
-                    logger.warning(f"🛑 Portfolio SL Reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
-                    close_all_positions(SYMBOL)
             
             # 2. 15-Minute Trading Cycle
             current_time = time.time()
