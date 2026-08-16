@@ -38,8 +38,8 @@ USE_PERCENTAGE_EXIT = True
 # --- Stop Loss (SL) and Take Profit (TP) Logic ---
 USE_ATR_FOR_EXIT = True
 
-# Fixed Settings (Used if USE_ATR_FOR_EXIT is False)
-FIXED_SL_POINTS = 500   
+# Fixed Settings (Used if USE_ATR_FOR_EXIT is False or if ATR is missing)
+FIXED_SL_POINTS = 10000   
 FIXED_TP_POINTS = 1000  
 
 # ATR-Based Settings (Used if USE_ATR_FOR_EXIT is True)
