@@ -65,11 +65,7 @@ def check_signal(symbol, timeframe):
     from logger import log_info
     log_info(f"STATUS | {symbol} | EMA9 is {state} EMA21 (EMA9: {curr_ema_short:.5f}, EMA21: {curr_ema_long:.5f}) | RSI: {rsi:.1f} | ATR: {atr:.5f}")
     
-    # Volatility Filter: avoid extremely low volatility
-    # Just an example threshold, could be tuned. For now, if ATR is extremely close to 0, reject.
-    if atr < (df['close'].iloc[-1] * 0.0001):  # Very tight filter example
-        log_info(f"STATUS | {symbol} | Volatility too low (ATR: {atr:.5f}). Skipping.")
-        return None, atr
+    # Volatility Filter removed by user request (bot will now trade regardless of how flat the market is).
         
     # Momentum Logic
     # Buy: Short EMA above Long EMA, Price above Short EMA, RSI > 50 (momentum up)
