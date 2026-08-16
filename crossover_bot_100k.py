@@ -6,72 +6,78 @@ from datetime import datetime
 import config
 from funded_rules_100k import FundedAccountRules100k
 from strategy import check_signal
-from trading_engine import check_open_positions, place_order
+from trading_engine import get_open_positions_count, get_portfolio_pnl, close_all_positions, place_order
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# User Configurable Settings (Defaults)
-SYMBOL = "BTCUSD"          # Default pair to trade
-TIMEFRAME = mt5.TIMEFRAME_M15 # Default timeframe (15 minutes)
-SLEEP_INTERVAL = 60        # How often to check for signals (in seconds)
+# User Configurable Settings
+SYMBOL = "BTCUSD"          
+TIMEFRAME = mt5.TIMEFRAME_M5  # Using 5m timeframe for momentum as requested
+TRADE_CYCLE_SECONDS = 900  # 15 minutes between signal checks
+MONITOR_INTERVAL = 5       # 5 seconds for continuous PnL monitoring
 
 def run_bot():
-    """Main loop for the $100K Funded Account Crossover Bot"""
-    
-    # 1. Initialize MT5
+    """Main loop for the $100K Funded Account Batch Bot"""
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized successfully. Started $100K Crossover Bot on {SYMBOL} ({TIMEFRAME})")
-    
-    # 2. Instantiate rules checker
+    logger.info(f"MT5 initialized successfully. Started $100K Batch Bot on {SYMBOL}")
     rules_checker = FundedAccountRules100k()
     
-    # Override config RISK_PERCENT to use the strict 3% max risk rule
-    config.RISK_PERCENT = rules_checker.MAX_RISK_PERCENT
-    logger.info(f"Risk configured to strict max {config.RISK_PERCENT}% per trade.")
+    last_trade_time = 0
 
     try:
         while True:
-            logger.info("--- New Check Cycle ---")
+            # 1. Continuous Portfolio Monitoring
+            open_count = get_open_positions_count(SYMBOL)
             
-            # 3. Check Funded Rules Limits
-            status = rules_checker.check_all_rules()
+            if open_count > 0:
+                pnl = get_portfolio_pnl(SYMBOL)
+                if pnl >= config.PORTFOLIO_TP_USD:
+                    logger.info(f"💰 Portfolio TP Reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
+                    close_all_positions(SYMBOL)
+                elif pnl <= -config.PORTFOLIO_SL_USD:
+                    logger.warning(f"🛑 Portfolio SL Reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
+                    close_all_positions(SYMBOL)
             
-            if not status["can_trade"]:
-                logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes before next check...")
-                time.sleep(300) # Sleep longer if we're halted
-                continue
+            # 2. 15-Minute Trading Cycle
+            current_time = time.time()
+            if current_time - last_trade_time >= TRADE_CYCLE_SECONDS:
+                logger.info("--- New 15-Minute Cycle Check ---")
                 
-            if status["profit_target_reached"]:
-                logger.info("Profit Target Reached! Bot will stand down and not take new trades.")
-                # We could exit here, but we might want to just hold until withdrawal.
-                time.sleep(3600)
-                continue
-                
-            # 4. Check if we already have open positions for this symbol
-            if check_open_positions(SYMBOL):
-                logger.info(f"Open position exists for {SYMBOL}. Waiting for it to close...")
-                time.sleep(SLEEP_INTERVAL)
-                continue
+                # Check Funded Rules Limits
+                status = rules_checker.check_all_rules()
+                if not status["can_trade"]:
+                    logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes...")
+                    time.sleep(300)
+                    continue
+                    
+                if status["profit_target_reached"]:
+                    logger.info("Profit Target Reached! Bot will stand down.")
+                    time.sleep(3600)
+                    continue
 
-            # 5. Check for Crossover Signals
-            signal, atr = check_signal(SYMBOL, TIMEFRAME)
-            
-            if signal == 'BUY':
-                logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}!")
-                place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr)
-            elif signal == 'SELL':
-                logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}!")
-                place_order(SYMBOL, mt5.ORDER_TYPE_SELL, atr)
-            else:
-                logger.info(f"No actionable signal for {SYMBOL}.")
-                
-            # 6. Sleep until next check
-            time.sleep(SLEEP_INTERVAL)
+                open_count = get_open_positions_count(SYMBOL)
+                if open_count < config.MAX_BATCH_POSITIONS:
+                    signal, atr = check_signal(SYMBOL, TIMEFRAME)
+                    if signal == 'BUY':
+                        logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}! Opening batch position.")
+                        place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr)
+                    elif signal == 'SELL':
+                        logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}! Opening batch position.")
+                        place_order(SYMBOL, mt5.ORDER_TYPE_SELL, atr)
+                    else:
+                        logger.info(f"No actionable signal for {SYMBOL}.")
+                else:
+                    logger.info(f"Max batch limit reached ({config.MAX_BATCH_POSITIONS}). Waiting for portfolio close.")
+                    
+                last_trade_time = current_time
+
+            # Sleep for continuous monitoring
+            time.sleep(MONITOR_INTERVAL)
 
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")

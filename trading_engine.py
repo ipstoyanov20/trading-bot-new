@@ -6,16 +6,68 @@ from datetime import datetime, timedelta
 def check_open_positions(symbol):
     """
     Checks if there are any active trades for a specific symbol.
-    Args:
-        symbol (str): The trading pair (e.g., 'XAUUSD').
-    Returns:
-        bool: True if positions exist, False otherwise.
     """
     positions = mt5.positions_get(symbol=symbol)
     if positions is None:
-        log_error(f"Failed to get positions for {symbol}: {mt5.last_error()}")
-        return True # Default to True to prevent double trading on error
-    return len(positions) > 0
+        return False
+    bot_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+    return len(bot_positions) > 0
+
+def get_open_positions_count(symbol):
+    """Returns the number of open positions for the bot's magic number."""
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
+        return 0
+    bot_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+    return len(bot_positions)
+
+def get_portfolio_pnl(symbol):
+    """Returns the total floating profit of all open bot positions."""
+    positions = mt5.positions_get(symbol=symbol)
+    if not positions:
+        return 0.0
+    return sum([p.profit for p in positions if p.magic == config.MAGIC_NUMBER])
+
+def close_all_positions(symbol):
+    """Closes all open positions for the bot's magic number."""
+    positions = mt5.positions_get(symbol=symbol)
+    if not positions:
+        return True
+    
+    success = True
+    for p in positions:
+        if p.magic != config.MAGIC_NUMBER:
+            continue
+            
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            continue
+            
+        order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": p.volume,
+            "type": order_type,
+            "position": p.ticket,
+            "price": price,
+            "deviation": config.DEVIATION,
+            "magic": config.MAGIC_NUMBER,
+            "comment": "Portfolio Close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        result = mt5.order_send(request)
+        if result is None or result.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            success = False
+            log_error(f"Failed to close position {p.ticket}: {mt5.last_error() if result is None else result.comment}")
+        else:
+            log_info(f"Closed position {p.ticket} at {price} for profit {p.profit}")
+            
+    return success
 
 def calculate_lot_size(symbol, risk_percent, sl_price_distance):
     """
@@ -111,7 +163,12 @@ def place_order(symbol, order_type, atr=None):
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     sl, tp, sl_dist = get_sl_tp(symbol, order_type, price, atr)
-    lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
+    
+    # Batch Portfolio uses a fixed lot size
+    lots = config.FIXED_LOT_SIZE
+    
+    # Emergency crash protection: we keep the SL, but remove the hard TP so portfolio logic can manage it
+    tp = 0.0
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,

@@ -61,3 +61,9 @@ REVX_BASE_URL = "https://revx.revolut.com"
 # --- General Scheduler ---
 # Interval at which the bot checks for new candles/data (if running a background loop)
 LOOP_INTERVAL_SECONDS = 60
+
+# --- Portfolio Batch Trading Settings ---
+PORTFOLIO_TP_USD = 1.0
+PORTFOLIO_SL_USD = 1.0
+FIXED_LOT_SIZE = 0.01
+MAX_BATCH_POSITIONS = 10
