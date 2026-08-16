@@ -62,17 +62,9 @@ def run_bot():
 
                 open_count = get_open_positions_count(SYMBOL)
                 if open_count == 0:  # Only open a new batch if we are flat
-                    signal, atr = check_signal(SYMBOL, TIMEFRAME)
-                    if signal == 'BUY':
-                        logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}! Opening {config.MAX_BATCH_POSITIONS} positions AT THE SAME TIME.")
-                        for _ in range(config.MAX_BATCH_POSITIONS):
-                            place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr)
-                    elif signal == 'SELL':
-                        logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}! Opening {config.MAX_BATCH_POSITIONS} positions AT THE SAME TIME.")
-                        for _ in range(config.MAX_BATCH_POSITIONS):
-                            place_order(SYMBOL, mt5.ORDER_TYPE_SELL, atr)
-                    else:
-                        logger.info(f"No actionable signal for {SYMBOL}.")
+                    logger.info(f"🟢 ZERO OPEN POSITIONS! Blindly opening {config.MAX_BATCH_POSITIONS} BUY positions AT THE SAME TIME (No strategy).")
+                    for _ in range(config.MAX_BATCH_POSITIONS):
+                        place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=None)
                 else:
                     logger.info(f"Batch currently active ({open_count} positions). Waiting for portfolio to hit $1.00 profit.")
                     
