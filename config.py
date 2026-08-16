@@ -56,7 +56,7 @@ REVX_BASE_URL = "https://revx.revolut.com"
 LOOP_INTERVAL_SECONDS = 60
 
 # --- Portfolio Batch Trading Settings ---
-PORTFOLIO_TP_USD = 1.0
+PORTFOLIO_TP_USD = 5.0
 PORTFOLIO_SL_USD = 1.0
 FIXED_LOT_SIZE = 0.01
 MAX_BATCH_POSITIONS = 5
