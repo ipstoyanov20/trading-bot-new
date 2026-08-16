@@ -28,6 +28,7 @@ def run_bot():
     rules_checker = FundedAccountRules100k()
     
     last_trade_time = 0
+    max_pnl = 0.0
 
     try:
         while True:
@@ -36,9 +37,24 @@ def run_bot():
             
             if open_count > 0:
                 pnl = get_portfolio_pnl(SYMBOL)
-                if pnl >= config.PORTFOLIO_TP_USD:
-                    logger.info(f"💰 Portfolio TP Reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
+                
+                if pnl > max_pnl:
+                    max_pnl = pnl
+
+                if pnl >= 10.0:
+                    logger.info(f"💰 Double-digit profit reached! Total PnL: ${pnl:.2f}. Closing all {open_count} positions.")
                     close_all_positions(SYMBOL)
+                    max_pnl = 0.0
+                elif max_pnl >= 2.0 and pnl <= max_pnl * 0.5:
+                    logger.info(f"📉 Profit dropping (Trailing Stop)! Max was ${max_pnl:.2f}, now ${pnl:.2f}. Closing to secure profit.")
+                    close_all_positions(SYMBOL)
+                    max_pnl = 0.0
+                elif max_pnl >= 0.5 and pnl <= 0.1:
+                    logger.info(f"⚠️ Profit vanished! Closing before loss. Max was ${max_pnl:.2f}, now ${pnl:.2f}.")
+                    close_all_positions(SYMBOL)
+                    max_pnl = 0.0
+            else:
+                max_pnl = 0.0
             
             # 2. 15-Minute Trading Cycle
             current_time = time.time()
@@ -59,11 +75,19 @@ def run_bot():
 
                 open_count = get_open_positions_count(SYMBOL)
                 if open_count == 0:  # Only open a new batch if we are flat
-                    logger.info(f"🟢 ZERO OPEN POSITIONS! Blindly opening {config.MAX_BATCH_POSITIONS} BUY positions AT THE SAME TIME (No strategy).")
-                    for _ in range(config.MAX_BATCH_POSITIONS):
-                        place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr=None)
+                    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 5)
+                    if rates is not None and len(rates) > 0:
+                        is_bullish = rates[-1]['close'] >= rates[0]['open']
+                        order_type = mt5.ORDER_TYPE_BUY if is_bullish else mt5.ORDER_TYPE_SELL
+                        action_str = "BUY" if is_bullish else "SELL"
+                        
+                        logger.info(f"🟢 ZERO OPEN POSITIONS! Brief history trend is {action_str}. Opening {config.MAX_BATCH_POSITIONS} {action_str} positions.")
+                        for _ in range(config.MAX_BATCH_POSITIONS):
+                            place_order(SYMBOL, order_type, atr=None)
+                    else:
+                        logger.warning("Failed to fetch rates for brief history check.")
                 else:
-                    logger.info(f"Batch currently active ({open_count} positions). Waiting for portfolio to hit $1.00 profit.")
+                    logger.info(f"Batch currently active ({open_count} positions). Waiting for portfolio to hit profit.")
                     
                 last_trade_time = current_time
 

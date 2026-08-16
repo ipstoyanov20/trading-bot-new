@@ -169,6 +169,7 @@ def place_order(symbol, order_type, atr=None):
     
     # Emergency crash protection: we keep the SL, but remove the hard TP so portfolio logic can manage it
     tp = 0.0
+    sl = 0.0
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
