@@ -5,72 +5,154 @@ from datetime import datetime
 
 import config
 from funded_rules_6k import FundedAccountRules6k
-from strategy import check_signal
-from trading_engine import check_open_positions, place_order
+from scalping_strategy import check_scalping_signal
+from trading_engine import check_open_positions, calculate_lot_size, close_all_positions
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# User Configurable Settings (Defaults)
-SYMBOL = "BTCUSD"          # Default pair to trade
-TIMEFRAME = mt5.TIMEFRAME_M15 # Default timeframe (15 minutes)
-SLEEP_INTERVAL = 60        # How often to check for signals (in seconds)
+# User Configurable Settings
+SYMBOL = "XAUUSD"          # Gold Scalping
+TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
+SLEEP_INTERVAL = 1         # 1 second for fast execution and alternative exit
+
+def check_3_consecutive_losses():
+    """Checks if the last 3 closed trades for today were losses."""
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    history_deals = mt5.history_deals_get(today, datetime.now())
+    if not history_deals:
+        return False
+    
+    # Filter for OUT deals (closed trades) that belong to this bot
+    closed_deals = [d for d in history_deals if d.entry == mt5.DEAL_ENTRY_OUT and d.magic == config.MAGIC_NUMBER]
+    
+    if len(closed_deals) >= 3:
+        # Check last 3 deals
+        last_3 = sorted(closed_deals, key=lambda x: x.time, reverse=True)[:3]
+        losses = 0
+        for d in last_3:
+            # PnL = profit + commission + swap
+            pnl = d.profit + d.commission + d.swap
+            if pnl < 0:
+                losses += 1
+        if losses >= 3:
+            return True
+    return False
+
+def place_scalping_order(symbol, order_type):
+    """Places an order with a fixed $2 SL and $3 TP for Gold."""
+    symbol_info = mt5.symbol_info(symbol)
+    if not symbol_info:
+        logger.error(f"Symbol {symbol} not found.")
+        return False
+    
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        logger.error(f"Failed to get price for {symbol}")
+        return False
+        
+    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+    
+    # SL/TP logic ($1 is 100 points if 1 pip = 0.01)
+    sl_dist = 2.00 # $2.00 move
+    tp_dist = 3.00 # $3.00 move (1:1.5 RR)
+    
+    if order_type == mt5.ORDER_TYPE_BUY:
+        sl = price - sl_dist
+        tp = price + tp_dist
+    else:
+        sl = price + sl_dist
+        tp = price - tp_dist
+        
+    # Calculate lots
+    lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
+    if lots == 0 or lots is None:
+        lots = symbol_info.volume_min
+        
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": float(lots),
+        "type": order_type,
+        "price": price,
+        "sl": float(sl),
+        "tp": float(tp),
+        "magic": config.MAGIC_NUMBER,
+        "comment": "1M Scalper Bot",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    res = mt5.order_send(request)
+    if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+        logger.info(f"Scalp Order Placed successfully: {request}")
+        return True
+    else:
+        err = mt5.last_error() if not res else res.comment
+        logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+        return False
 
 def run_bot():
-    """Main loop for the $6K Funded Account Crossover Bot"""
+    """Main loop for the $6K Funded Account XAUUSD Scalping Bot"""
     
-    # 1. Initialize MT5
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized successfully. Started $6K Crossover Bot on {SYMBOL} ({TIMEFRAME})")
-    
-    # 2. Instantiate rules checker
+    logger.info(f"MT5 initialized. Started $6K XAUUSD Scalping Bot on {TIMEFRAME}")
     rules_checker = FundedAccountRules6k()
     
-    # Override config RISK_PERCENT to use the strict 3% max risk rule
     config.RISK_PERCENT = rules_checker.MAX_RISK_PERCENT
     logger.info(f"Risk configured to strict max {config.RISK_PERCENT}% per trade.")
 
     try:
         while True:
-            logger.info("--- New Check Cycle ---")
-            
-            # 3. Check Funded Rules Limits
+            # 1. Rules Check
             status = rules_checker.check_all_rules()
-            
             if not status["can_trade"]:
-                logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes before next check...")
-                time.sleep(300) # Sleep longer if we're halted
+                logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes...")
+                time.sleep(300)
                 continue
                 
             if status["profit_target_reached"]:
-                logger.info("Profit Target Reached! Bot will stand down and not take new trades.")
-                # We could exit here, but we might want to just hold until withdrawal.
+                logger.info("Profit Target Reached! Bot will stand down.")
                 time.sleep(3600)
                 continue
                 
-            # 4. Check if we already have open positions for this symbol
+            # 2. 3 Consecutive Losses Rule
+            if check_3_consecutive_losses():
+                logger.error("🚫 3 Consecutive Losses hit today. Halting trading to prevent revenge trading.")
+                time.sleep(3600) # Sleep for an hour or until restarted
+                continue
+                
+            # 3. Handle Open Positions (Alternative Exit)
             if check_open_positions(SYMBOL):
-                logger.info(f"Open position exists for {SYMBOL}. Waiting for it to close...")
+                positions = mt5.positions_get(symbol=SYMBOL)
+                if positions:
+                    for p in positions:
+                        if p.magic == config.MAGIC_NUMBER:
+                            _, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
+                            if curr_k is not None:
+                                if p.type == mt5.POSITION_TYPE_BUY and curr_k >= 80:
+                                    logger.info(f"Alternative Exit: Stoch K hit {curr_k:.1f} >= 80 for BUY. Closing manually.")
+                                    close_all_positions(SYMBOL)
+                                elif p.type == mt5.POSITION_TYPE_SELL and curr_k <= 20:
+                                    logger.info(f"Alternative Exit: Stoch K hit {curr_k:.1f} <= 20 for SELL. Closing manually.")
+                                    close_all_positions(SYMBOL)
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 5. Check for Crossover Signals
-            signal, atr = check_signal(SYMBOL, TIMEFRAME)
+            # 4. Check Signals for New Positions
+            signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}!")
-                place_order(SYMBOL, mt5.ORDER_TYPE_BUY, atr)
+                logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}! (Stoch K: {curr_k:.1f})")
+                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
             elif signal == 'SELL':
-                logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}!")
-                place_order(SYMBOL, mt5.ORDER_TYPE_SELL, atr)
-            else:
-                logger.info(f"No actionable signal for {SYMBOL}.")
+                logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}! (Stoch K: {curr_k:.1f})")
+                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
                 
-            # 6. Sleep until next check
             time.sleep(SLEEP_INTERVAL)
 
     except KeyboardInterrupt:

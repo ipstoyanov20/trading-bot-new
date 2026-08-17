@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # User Configurable Settings
-SYMBOL = "BTCUSD"          
+SYMBOL = "XAUUSD"          
 TIMEFRAME = mt5.TIMEFRAME_M5  # Using 5m timeframe for momentum as requested
 TRADE_CYCLE_SECONDS = 900  # 15 minutes between signal checks
 MONITOR_INTERVAL = 5       # 5 seconds for continuous PnL monitoring
