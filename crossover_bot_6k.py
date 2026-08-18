@@ -154,6 +154,10 @@ def run_bot():
         return
 
     logger.info(f"MT5 initialized. Started $6K XAUUSD Scalping Bot on {TIMEFRAME}")
+    
+    # Send a startup test message
+    send_telegram_message("🤖 **Trading Bot has started successfully and is monitoring the markets!**")
+    
     rules_checker = FundedAccountRules6k()
     
     config.RISK_PERCENT = rules_checker.MAX_RISK_PERCENT
@@ -188,12 +192,23 @@ def run_bot():
                                 if p.profit > peak_profits[p.ticket]:
                                     peak_profits[p.ticket] = p.profit
                             
-                            if peak_profits[p.ticket] > 0 and p.profit <= (peak_profits[p.ticket] * 0.5):
+                            # Trailing stop: close if profit drops 20% from peak
+                            if peak_profits[p.ticket] > 0 and p.profit <= (peak_profits[p.ticket] * 0.80):
                                 logger.info(f"Trailing Stop hit for position {p.ticket}. Peak: ${peak_profits[p.ticket]:.2f}, Current: ${p.profit:.2f}. Closing...")
                                 if close_position_by_ticket(SYMBOL, p.ticket):
                                     msg = f"🛑 **Trailing Stop Hit**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Peak Profit:** ${peak_profits[p.ticket]:.2f}\n• **Closed Profit:** ${p.profit:.2f}"
                                     send_telegram_message(msg)
                                     del peak_profits[p.ticket]
+                                continue
+                                
+                            # Hard stop loss: close if loss exceeds $50
+                            if p.profit <= -50.0:
+                                logger.info(f"Hard Stop Loss hit for position {p.ticket}. Current: ${p.profit:.2f}. Closing...")
+                                if close_position_by_ticket(SYMBOL, p.ticket):
+                                    msg = f"💥 **Hard Stop Loss Hit**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Closed Profit:** ${p.profit:.2f}"
+                                    send_telegram_message(msg)
+                                    if p.ticket in peak_profits:
+                                        del peak_profits[p.ticket]
                                 continue
                                 
                             _, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
