@@ -173,9 +173,7 @@ def run_bot():
                 
             # 2. 3 Consecutive Losses Rule
             if check_3_consecutive_losses():
-                logger.error("🚫 3 Consecutive Losses hit today. Halting trading to prevent revenge trading.")
-                time.sleep(3600) # Sleep for an hour or until restarted
-                continue
+                logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
             # 3. Handle Open Positions (Alternative Exit)
             if check_open_positions(SYMBOL):
