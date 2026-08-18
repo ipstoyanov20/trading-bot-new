@@ -6,7 +6,8 @@ from datetime import datetime
 import config
 from funded_rules_6k import FundedAccountRules6k
 from scalping_strategy import check_scalping_signal
-from trading_engine import check_open_positions, calculate_lot_size, close_all_positions
+from trading_engine import check_open_positions, calculate_lot_size, close_all_positions, close_position_by_ticket
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,6 +17,53 @@ logger = logging.getLogger(__name__)
 SYMBOL = "XAUUSD"          # Gold Scalping
 TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
 SLEEP_INTERVAL = 1         # 1 second for fast execution and alternative exit
+
+TELEGRAM_BOT_TOKEN = "8922725855:AAH5r_dnD2kRNsB0qb4iA-Tqdbrm35OXsEE"
+TELEGRAM_CHAT_ID = None  # Will be auto-fetched
+
+peak_profits = {}
+
+def get_chat_id_from_updates():
+    """Fetches the chat ID from recent bot messages."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        response = requests.get(url).json()
+        if response.get("ok") and response.get("result"):
+            # Get the chat ID of the most recent message
+            return response["result"][-1]["message"]["chat"]["id"]
+    except Exception as e:
+        logger.error(f"Error fetching getUpdates: {e}")
+    return None
+
+def send_telegram_message(message):
+    """Sends a message via the Telegram Bot API."""
+    global TELEGRAM_CHAT_ID
+    
+    # Auto-fetch the chat ID if we don't have it
+    if TELEGRAM_CHAT_ID is None:
+        fetched_id = get_chat_id_from_updates()
+        if fetched_id:
+            TELEGRAM_CHAT_ID = fetched_id
+            logger.info(f"Auto-fetched Telegram Chat ID: {TELEGRAM_CHAT_ID}")
+        else:
+            logger.warning("Could not auto-fetch Chat ID. Make sure you have sent a message (like /start) to your bot first!")
+            return
+            
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    try:
+        response = requests.post(url, json=payload)
+        if not response.ok:
+            logger.error(f"Failed to send Telegram message: {response.text}")
+            # If forbidden or chat not found, reset chat ID to try again next time
+            if response.status_code in [400, 403]:
+                TELEGRAM_CHAT_ID = None
+    except Exception as e:
+        logger.error(f"Exception sending Telegram message: {e}")
 
 def check_3_consecutive_losses():
     """Checks if the last 3 closed trades for today were losses."""
@@ -87,6 +135,11 @@ def place_scalping_order(symbol, order_type):
     res = mt5.order_send(request)
     if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
         logger.info(f"Scalp Order Placed successfully: {request}")
+        
+        action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
+        msg = f"🚀 **New Position Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots}\n• **SL:** {sl}\n• **TP:** {tp}"
+        send_telegram_message(msg)
+        
         return True
     else:
         err = mt5.last_error() if not res else res.comment
@@ -111,9 +164,7 @@ def run_bot():
             # 1. Rules Check
             status = rules_checker.check_all_rules()
             if not status["can_trade"]:
-                logger.warning("TRADING HALTED by Rules Engine. Waiting 5 minutes...")
-                time.sleep(300)
-                continue
+                logger.warning("Rules Engine indicates limits hit! Trading will continue as requested.")
                 
             if status["profit_target_reached"]:
                 logger.info("Profit Target Reached! Bot will stand down.")
@@ -132,6 +183,21 @@ def run_bot():
                 if positions:
                     for p in positions:
                         if p.magic == config.MAGIC_NUMBER:
+                            # Trailing stop logic
+                            if p.ticket not in peak_profits:
+                                peak_profits[p.ticket] = p.profit
+                            else:
+                                if p.profit > peak_profits[p.ticket]:
+                                    peak_profits[p.ticket] = p.profit
+                            
+                            if peak_profits[p.ticket] > 0 and p.profit <= (peak_profits[p.ticket] * 0.5):
+                                logger.info(f"Trailing Stop hit for position {p.ticket}. Peak: ${peak_profits[p.ticket]:.2f}, Current: ${p.profit:.2f}. Closing...")
+                                if close_position_by_ticket(SYMBOL, p.ticket):
+                                    msg = f"🛑 **Trailing Stop Hit**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Peak Profit:** ${peak_profits[p.ticket]:.2f}\n• **Closed Profit:** ${p.profit:.2f}"
+                                    send_telegram_message(msg)
+                                    del peak_profits[p.ticket]
+                                continue
+                                
                             _, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
                             if curr_k is not None:
                                 if p.type == mt5.POSITION_TYPE_BUY and curr_k >= 80:

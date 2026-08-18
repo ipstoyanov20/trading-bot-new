@@ -69,6 +69,42 @@ def close_all_positions(symbol):
             
     return success
 
+def close_position_by_ticket(symbol, ticket):
+    """Closes a specific open position by its ticket number."""
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        return False
+        
+    p = positions[0]
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return False
+        
+    order_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": p.volume,
+        "type": order_type,
+        "position": p.ticket,
+        "price": price,
+        "deviation": config.DEVIATION,
+        "magic": config.MAGIC_NUMBER,
+        "comment": "Close by Ticket",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    result = mt5.order_send(request)
+    if result is None or result.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+        log_error(f"Failed to close position {p.ticket}: {mt5.last_error() if result is None else result.comment}")
+        return False
+    else:
+        log_info(f"Closed position {p.ticket} at {price} for profit {p.profit}")
+        return True
+
 def calculate_lot_size(symbol, risk_percent, sl_price_distance):
     """
     Calculates the appropriate lot size based on account equity and risk percentage.
