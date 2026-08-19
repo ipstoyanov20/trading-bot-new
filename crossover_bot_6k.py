@@ -102,17 +102,6 @@ def place_scalping_order(symbol, order_type):
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
-    # SL/TP logic ($1 is 100 points if 1 pip = 0.01)
-    sl_dist = 1.00 # $1.00 move
-    tp_dist = 1.50 # $1.50 move (1:1.5 RR)
-    
-    if order_type == mt5.ORDER_TYPE_BUY:
-        sl = price - sl_dist
-        tp = price + tp_dist
-    else:
-        sl = price + sl_dist
-        tp = price - tp_dist
-        
     # Calculate lots
     lots = 0.03
         
@@ -122,8 +111,6 @@ def place_scalping_order(symbol, order_type):
         "volume": float(lots),
         "type": order_type,
         "price": price,
-        "sl": float(sl),
-        "tp": float(tp),
         "magic": config.MAGIC_NUMBER,
         "comment": "1M Scalper Bot",
         "type_time": mt5.ORDER_TIME_GTC,
@@ -183,14 +170,11 @@ def run_bot():
                 if positions:
                     for p in positions:
                         if p.magic == config.MAGIC_NUMBER:
-                            _, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
-                            if curr_k is not None:
-                                if p.type == mt5.POSITION_TYPE_BUY and curr_k >= 80:
-                                    logger.info(f"Alternative Exit: Stoch K hit {curr_k:.1f} >= 80 for BUY. Closing manually.")
-                                    close_all_positions(SYMBOL)
-                                elif p.type == mt5.POSITION_TYPE_SELL and curr_k <= 20:
-                                    logger.info(f"Alternative Exit: Stoch K hit {curr_k:.1f} <= 20 for SELL. Closing manually.")
-                                    close_all_positions(SYMBOL)
+                            if p.profit > 0.10:
+                                logger.info(f"Profit hit (${p.profit:.2f})! Closing position {p.ticket}.")
+                                close_position_by_ticket(SYMBOL, p.ticket)
+                                msg = f"✅ **Instant Profit Closed**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Profit:** ${p.profit:.2f}"
+                                send_telegram_message(msg)
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
