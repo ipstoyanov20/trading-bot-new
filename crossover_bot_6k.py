@@ -114,9 +114,7 @@ def place_scalping_order(symbol, order_type):
         tp = price - tp_dist
         
     # Calculate lots
-    lots = calculate_lot_size(symbol, config.RISK_PERCENT, sl_dist)
-    if lots == 0 or lots is None:
-        lots = symbol_info.volume_min
+    lots = 0.03
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
