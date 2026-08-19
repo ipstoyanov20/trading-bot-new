@@ -67,19 +67,25 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     # BUY LOGIC
     # 1. 50 EMA > 200 EMA
     is_uptrend = (curr_ema_50 > curr_ema_200)
-    # 2. Stochastic is below 20 and K is above D (Aggressive)
-    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d)
     
-    if is_uptrend and stoch_buy_cross:
+    # 2. Stochastic is below 20 and K is above D (Aggressive)
+    # stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d)
+    # if is_uptrend and stoch_buy_cross:
+    
+    # --- TEMPORARY OVERRIDE: Trade purely on trend ---
+    if is_uptrend:
         return 'BUY', curr_k
         
     # SELL LOGIC
     # 1. 50 EMA < 200 EMA
     is_downtrend = (curr_ema_50 < curr_ema_200)
-    # 2. Stochastic is above 80 and K is below D (Aggressive)
-    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d)
     
-    if is_downtrend and stoch_sell_cross:
+    # 2. Stochastic is above 80 and K is below D (Aggressive)
+    # stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d)
+    # if is_downtrend and stoch_sell_cross:
+    
+    # --- TEMPORARY OVERRIDE: Trade purely on trend ---
+    if is_downtrend:
         return 'SELL', curr_k
 
     return None, curr_k
