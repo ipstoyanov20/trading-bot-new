@@ -185,32 +185,6 @@ def run_bot():
                 if positions:
                     for p in positions:
                         if p.magic == config.MAGIC_NUMBER:
-                            # Trailing stop logic
-                            if p.ticket not in peak_profits:
-                                peak_profits[p.ticket] = p.profit
-                            else:
-                                if p.profit > peak_profits[p.ticket]:
-                                    peak_profits[p.ticket] = p.profit
-                            
-                            # Trailing stop: close if profit drops 20% from peak
-                            if peak_profits[p.ticket] > 0 and p.profit <= (peak_profits[p.ticket] * 0.80):
-                                logger.info(f"Trailing Stop hit for position {p.ticket}. Peak: ${peak_profits[p.ticket]:.2f}, Current: ${p.profit:.2f}. Closing...")
-                                if close_position_by_ticket(SYMBOL, p.ticket):
-                                    msg = f"🛑 **Trailing Stop Hit**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Peak Profit:** ${peak_profits[p.ticket]:.2f}\n• **Closed Profit:** ${p.profit:.2f}"
-                                    send_telegram_message(msg)
-                                    del peak_profits[p.ticket]
-                                continue
-                                
-                            # Hard stop loss: close if loss exceeds $50
-                            if p.profit <= -50.0:
-                                logger.info(f"Hard Stop Loss hit for position {p.ticket}. Current: ${p.profit:.2f}. Closing...")
-                                if close_position_by_ticket(SYMBOL, p.ticket):
-                                    msg = f"💥 **Hard Stop Loss Hit**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Closed Profit:** ${p.profit:.2f}"
-                                    send_telegram_message(msg)
-                                    if p.ticket in peak_profits:
-                                        del peak_profits[p.ticket]
-                                continue
-                                
                             _, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
                             if curr_k is not None:
                                 if p.type == mt5.POSITION_TYPE_BUY and curr_k >= 80:
