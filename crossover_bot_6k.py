@@ -122,7 +122,7 @@ def place_scalping_order(symbol, order_type):
         logger.info(f"Scalp Order Placed successfully: {request}")
         
         action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-        msg = f"🚀 **New Position Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots}\n• **SL:** {sl}\n• **TP:** {tp}"
+        msg = f"🚀 **New Position Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots}"
         send_telegram_message(msg)
         
         return True
