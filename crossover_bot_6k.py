@@ -103,8 +103,8 @@ def place_scalping_order(symbol, order_type):
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
     # SL/TP logic ($1 is 100 points if 1 pip = 0.01)
-    sl_dist = 2.00 # $2.00 move
-    tp_dist = 3.00 # $3.00 move (1:1.5 RR)
+    sl_dist = 1.00 # $1.00 move
+    tp_dist = 1.50 # $1.50 move (1:1.5 RR)
     
     if order_type == mt5.ORDER_TYPE_BUY:
         sl = price - sl_dist

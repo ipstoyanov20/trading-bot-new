@@ -65,8 +65,8 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     log_info(f"SCALP STATUS | {symbol} | Trend: {state} (50EMA: {curr_ema_50:.2f}, 200EMA: {curr_ema_200:.2f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f}")
 
     # BUY LOGIC
-    # 1. Price > 50 EMA > 200 EMA
-    is_uptrend = (curr_close > curr_ema_50) and (curr_ema_50 > curr_ema_200)
+    # 1. 50 EMA > 200 EMA
+    is_uptrend = (curr_ema_50 > curr_ema_200)
     # 2. Stochastic drops below 20 and crosses UP
     stoch_buy_cross = (prev_k < 20) and (prev_k <= prev_d) and (curr_k > curr_d)
     
@@ -74,8 +74,8 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
         return 'BUY', curr_k
         
     # SELL LOGIC
-    # 1. Price < 50 EMA < 200 EMA
-    is_downtrend = (curr_close < curr_ema_50) and (curr_ema_50 < curr_ema_200)
+    # 1. 50 EMA < 200 EMA
+    is_downtrend = (curr_ema_50 < curr_ema_200)
     # 2. Stochastic rises above 80 and crosses DOWN
     stoch_sell_cross = (prev_k > 80) and (prev_k >= prev_d) and (curr_k < curr_d)
     
