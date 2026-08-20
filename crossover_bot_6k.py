@@ -8,6 +8,8 @@ from funded_rules_6k import FundedAccountRules6k
 from scalping_strategy import check_scalping_signal
 from trading_engine import check_open_positions, calculate_lot_size, close_all_positions, close_position_by_ticket
 import requests
+from firebase_logger import log_trade_to_firebase
+from gemini_analyzer import analyze_market
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -102,8 +104,8 @@ def place_scalping_order(symbol, order_type):
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
-    # Calculate lots
-    lots = 0.03
+    # Fixed lots
+    lots = 1.0
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -117,19 +119,22 @@ def place_scalping_order(symbol, order_type):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
     
-    res = mt5.order_send(request)
-    if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-        logger.info(f"Scalp Order Placed successfully: {request}")
-        
+    success = True
+    for _ in range(5):
+        res = mt5.order_send(request)
+        if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            logger.info(f"Scalp Order Placed successfully: {request}")
+        else:
+            err = mt5.last_error() if not res else res.comment
+            logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+            success = False
+            
+    if success:
         action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-        msg = f"🚀 **New Position Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots}"
+        msg = f"🚀 **5 New Positions Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots} (x5)"
         send_telegram_message(msg)
-        
         return True
-    else:
-        err = mt5.last_error() if not res else res.comment
-        logger.error(f"Failed to place scalp order: {err} | Request: {request}")
-        return False
+    return False
 
 def run_bot():
     """Main loop for the $6K Funded Account XAUUSD Scalping Bot"""
@@ -173,6 +178,11 @@ def run_bot():
                             if p.profit > 0.10:
                                 logger.info(f"Profit hit (${p.profit:.2f})! Closing position {p.ticket}.")
                                 close_position_by_ticket(SYMBOL, p.ticket)
+                                
+                                # Log to Firebase
+                                trade_type = 'BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL'
+                                log_trade_to_firebase(p.ticket, SYMBOL, trade_type, p.price_open, p.price_current, p.profit, p.volume)
+                                
                                 msg = f"✅ **Instant Profit Closed**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Profit:** ${p.profit:.2f}"
                                 send_telegram_message(msg)
                 time.sleep(SLEEP_INTERVAL)
@@ -181,12 +191,19 @@ def run_bot():
             # 4. Check Signals for New Positions
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
-            if signal == 'BUY':
-                logger.info(f"🟢 BUY SIGNAL detected for {SYMBOL}! (Stoch K: {curr_k:.1f})")
-                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
-            elif signal == 'SELL':
-                logger.info(f"🔴 SELL SIGNAL detected for {SYMBOL}! (Stoch K: {curr_k:.1f})")
-                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
+            if signal in ['BUY', 'SELL']:
+                trend = "BULLISH" if signal == 'BUY' else "BEARISH"
+                # Ask Gemini
+                gemini_decision = analyze_market(trend, curr_k, 0.0) # Using 0 for curr_d for simplicity since scalping_strategy removed it
+                
+                if gemini_decision == 'BUY':
+                    logger.info(f"🟢 BUY SIGNAL confirmed by Gemini for {SYMBOL}!")
+                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
+                elif gemini_decision == 'SELL':
+                    logger.info(f"🔴 SELL SIGNAL confirmed by Gemini for {SYMBOL}!")
+                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
+                else:
+                    logger.info("Gemini recommended HOLD. Skipping signal.")
                 
             time.sleep(SLEEP_INTERVAL)
 

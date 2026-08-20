@@ -1,2 +1,4 @@
 .log
 .pyc
+config_secrets.py
+firebase_credentials.json
