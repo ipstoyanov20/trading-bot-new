@@ -39,19 +39,29 @@ def analyze_market(trend, curr_k, curr_d):
         - If the trend is strong and recent trades were successful, recommend the direction of the trend (BUY or SELL).
         - If recent trades have been losing heavily or the market is flat, recommend HOLD.
         
-        Respond with ONLY ONE WORD: BUY, SELL, or HOLD.
+        Additionally, you MUST determine the Stop Loss (SL) and Take Profit (TP) distance in dollars (points) to attach to these trades.
+        Typical SL is between 1.0 and 3.0. Typical TP is between 2.0 and 5.0.
+        
+        Respond with ONLY ONE LINE in the exact format:
+        ACTION, SL_DISTANCE, TP_DISTANCE
+        
+        Example: BUY, 1.5, 3.0
+        Example: HOLD, 0.0, 0.0
         """
         
         response = model.generate_content(prompt)
-        decision = response.text.strip().upper()
+        text = response.text.strip().upper()
         
-        if decision in ['BUY', 'SELL', 'HOLD']:
-            logger.info(f"Gemini Analysis complete. Recommended Action: {decision}")
-            return decision
-        else:
-            logger.warning(f"Gemini returned unexpected response: {decision}")
-            return 'HOLD'
+        parts = [p.strip() for p in text.split(',')]
+        if len(parts) == 3:
+            decision, sl, tp = parts[0], float(parts[1]), float(parts[2])
+            if decision in ['BUY', 'SELL', 'HOLD']:
+                logger.info(f"Gemini Analysis complete. Recommended Action: {decision}, SL: {sl}, TP: {tp}")
+                return decision, sl, tp
+            
+        logger.warning(f"Gemini returned unexpected response: {text}")
+        return 'HOLD', 0.0, 0.0
             
     except Exception as e:
         logger.error(f"Gemini Analysis failed: {e}")
-        return 'HOLD'
+        return 'HOLD', 0.0, 0.0

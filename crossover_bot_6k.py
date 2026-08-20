@@ -90,8 +90,8 @@ def check_3_consecutive_losses():
             return True
     return False
 
-def place_scalping_order(symbol, order_type):
-    """Places an order with a fixed $2 SL and $3 TP for Gold."""
+def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
+    """Places an order with Gemini-provided SL and TP for Gold."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         logger.error(f"Symbol {symbol} not found.")
@@ -104,6 +104,14 @@ def place_scalping_order(symbol, order_type):
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
+    # Calculate actual price levels
+    if order_type == mt5.ORDER_TYPE_BUY:
+        sl = price - sl_dist if sl_dist > 0 else 0.0
+        tp = price + tp_dist if tp_dist > 0 else 0.0
+    else:
+        sl = price + sl_dist if sl_dist > 0 else 0.0
+        tp = price - tp_dist if tp_dist > 0 else 0.0
+        
     # Fixed lots
     lots = 1.0
         
@@ -113,6 +121,8 @@ def place_scalping_order(symbol, order_type):
         "volume": float(lots),
         "type": order_type,
         "price": price,
+        "sl": float(sl),
+        "tp": float(tp),
         "magic": config.MAGIC_NUMBER,
         "comment": "1M Scalper Bot",
         "type_time": mt5.ORDER_TIME_GTC,
@@ -131,7 +141,7 @@ def place_scalping_order(symbol, order_type):
             
     if success:
         action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-        msg = f"🚀 **5 New Positions Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots} (x5)"
+        msg = f"🚀 **5 New Positions Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots} (x5)\n• **SL:** {sl}\n• **TP:** {tp}"
         send_telegram_message(msg)
         return True
     return False
@@ -169,22 +179,11 @@ def run_bot():
             if check_3_consecutive_losses():
                 logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
-            # 3. Handle Open Positions (Alternative Exit)
+            # 3. Handle Open Positions (Wait for MT5 SL/TP or manual close)
+            # Instant profit closing has been removed per user request.
+            # MT5 will automatically close positions when the Gemini-provided TP or SL is hit.
+            # We can simply sleep and let it run.
             if check_open_positions(SYMBOL):
-                positions = mt5.positions_get(symbol=SYMBOL)
-                if positions:
-                    for p in positions:
-                        if p.magic == config.MAGIC_NUMBER:
-                            if p.profit > 0.10:
-                                logger.info(f"Profit hit (${p.profit:.2f})! Closing position {p.ticket}.")
-                                close_position_by_ticket(SYMBOL, p.ticket)
-                                
-                                # Log to Firebase
-                                trade_type = 'BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL'
-                                log_trade_to_firebase(p.ticket, SYMBOL, trade_type, p.price_open, p.price_current, p.profit, p.volume)
-                                
-                                msg = f"✅ **Instant Profit Closed**\n\n• **Symbol:** {SYMBOL}\n• **Ticket:** {p.ticket}\n• **Profit:** ${p.profit:.2f}"
-                                send_telegram_message(msg)
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
@@ -194,14 +193,14 @@ def run_bot():
             if signal in ['BUY', 'SELL']:
                 trend = "BULLISH" if signal == 'BUY' else "BEARISH"
                 # Ask Gemini
-                gemini_decision = analyze_market(trend, curr_k, 0.0) # Using 0 for curr_d for simplicity since scalping_strategy removed it
+                gemini_decision, sl_dist, tp_dist = analyze_market(trend, curr_k, 0.0) # Using 0 for curr_d for simplicity since scalping_strategy removed it
                 
                 if gemini_decision == 'BUY':
-                    logger.info(f"🟢 BUY SIGNAL confirmed by Gemini for {SYMBOL}!")
-                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
+                    logger.info(f"🟢 BUY SIGNAL confirmed by Gemini for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
+                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
                 elif gemini_decision == 'SELL':
-                    logger.info(f"🔴 SELL SIGNAL confirmed by Gemini for {SYMBOL}!")
-                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
+                    logger.info(f"🔴 SELL SIGNAL confirmed by Gemini for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
+                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 else:
                     logger.info("Gemini recommended HOLD. Skipping signal.")
                 
