@@ -13,8 +13,8 @@ except ImportError:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Use the latest model
-model = genai.GenerativeModel('gemini-2.5-pro')
+# Use the standard alias to avoid version conflicts
+model = genai.GenerativeModel('gemini-pro')
 
 def analyze_market(trend, curr_k, curr_d):
     """
