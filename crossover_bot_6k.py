@@ -19,7 +19,7 @@ TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
 SLEEP_INTERVAL = 1         # 1 second for fast execution and alternative exit
 
 TELEGRAM_BOT_TOKEN = "8922725855:AAH5r_dnD2kRNsB0qb4iA-Tqdbrm35OXsEE"
-TELEGRAM_CHAT_ID = None  # Will be auto-fetched
+TELEGRAM_CHAT_ID = "7403380678"
 
 peak_profits = {}
 
