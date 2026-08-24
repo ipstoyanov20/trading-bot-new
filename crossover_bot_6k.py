@@ -8,8 +8,6 @@ from funded_rules_6k import FundedAccountRules6k
 from scalping_strategy import check_scalping_signal
 from trading_engine import check_open_positions, calculate_lot_size, close_all_positions, close_position_by_ticket
 import requests
-from firebase_logger import log_trade_to_firebase
-from gemini_analyzer import analyze_market
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -190,19 +188,14 @@ def run_bot():
             # 4. Check Signals for New Positions
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
-            if signal in ['BUY', 'SELL']:
-                trend = "BULLISH" if signal == 'BUY' else "BEARISH"
-                # Ask Gemini
-                gemini_decision, sl_dist, tp_dist = analyze_market(trend, curr_k, 0.0) # Using 0 for curr_d for simplicity since scalping_strategy removed it
-                
-                if gemini_decision == 'BUY':
-                    logger.info(f"🟢 BUY SIGNAL confirmed by Gemini for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
-                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
-                elif gemini_decision == 'SELL':
-                    logger.info(f"🔴 SELL SIGNAL confirmed by Gemini for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
-                    place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
-                else:
-                    logger.info("Gemini recommended HOLD. Skipping signal.")
+            if signal == 'BUY':
+                sl_dist, tp_dist = 1.5, 3.0 # Default strict SL and TP distances
+                logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
+                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
+            elif signal == 'SELL':
+                sl_dist, tp_dist = 1.5, 3.0 # Default strict SL and TP distances
+                logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
+                place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 
             time.sleep(SLEEP_INTERVAL)
 
