@@ -38,6 +38,15 @@ def calculate_indicators(df):
     # %D (SMA of Slow %K)
     df['stoch_d'] = df['stoch_k'].rolling(window=d_period).mean()
     
+    # Calculate RSI (14) using EMA
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
     return df
 
 def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
@@ -57,19 +66,20 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     
     curr_k = df['stoch_k'].iloc[-1]
     curr_d = df['stoch_d'].iloc[-1]
+    curr_rsi = df['rsi'].iloc[-1]
     prev_k = df['stoch_k'].iloc[-2]
     prev_d = df['stoch_d'].iloc[-2]
     
     # Logging
     state = "BULLISH" if curr_ema_50 > curr_ema_200 else "BEARISH"
-    log_info(f"SCALP STATUS | {symbol} | Trend: {state} (50EMA: {curr_ema_50:.2f}, 200EMA: {curr_ema_200:.2f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f}")
+    log_info(f"SCALP STATUS | {symbol} | Trend: {state} (50EMA: {curr_ema_50:.2f}, 200EMA: {curr_ema_200:.2f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f} | RSI: {curr_rsi:.1f}")
 
     # BUY LOGIC
     # 1. 50 EMA > 200 EMA
     is_uptrend = (curr_ema_50 > curr_ema_200)
     
-    # 2. Stochastic is below 20 and K is above D (Aggressive)
-    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d)
+    # 2. Stochastic is below 20 and K is above D (Aggressive) and RSI > 50 (Trend confirmation)
+    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d) and (curr_rsi > 50)
     
     if is_uptrend and stoch_buy_cross:
         return 'BUY', curr_k
@@ -78,8 +88,8 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     # 1. 50 EMA < 200 EMA
     is_downtrend = (curr_ema_50 < curr_ema_200)
     
-    # 2. Stochastic is above 80 and K is below D (Aggressive)
-    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d)
+    # 2. Stochastic is above 80 and K is below D (Aggressive) and RSI < 50 (Trend confirmation)
+    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d) and (curr_rsi < 50)
     
     if is_downtrend and stoch_sell_cross:
         return 'SELL', curr_k

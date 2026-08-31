@@ -82,19 +82,14 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
     
-    success = True
-    for _ in range(5):
-        res = mt5.order_send(request)
-        if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            logger.info(f"Scalp Order Placed successfully: {request}")
-        else:
-            err = mt5.last_error() if not res else res.comment
-            logger.error(f"Failed to place scalp order: {err} | Request: {request}")
-            success = False
-            
-    if success:
+    res = mt5.order_send(request)
+    if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+        logger.info(f"Scalp Order Placed successfully: {request}")
         return True
-    return False
+    else:
+        err = mt5.last_error() if not res else res.comment
+        logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+        return False
 
 def run_bot():
     """Main loop for the $6K Funded Account XAUUSD Scalping Bot"""
@@ -138,11 +133,11 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                sl_dist, tp_dist = 1.5, 3.0 # Default strict SL and TP distances
+                sl_dist, tp_dist = 1.0, 3.0 # Strict SL and TP distances
                 logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
             elif signal == 'SELL':
-                sl_dist, tp_dist = 1.5, 3.0 # Default strict SL and TP distances
+                sl_dist, tp_dist = 1.0, 3.0 # Strict SL and TP distances
                 logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 
