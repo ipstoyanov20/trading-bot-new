@@ -74,7 +74,7 @@ def place_scalping_order(symbol, order_type):
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
     # 1.0 Fixed lots and no hard SL/TP on the broker order
-    lots = 10.0
+    lots = 5.0
     sl = 0.0
     tp = 0.0
         
@@ -116,7 +116,7 @@ def place_scalping_order(symbol, order_type):
     logger.error(f"Failed to place scalp order: {err} | Request: {request}")
     return False
 
-def monitor_profit_target(symbol, target_profit=100.0):
+def monitor_profit_target(symbol, target_profit=50.0):
     """
     Monitors all open bot positions for the symbol.
     Closes the trade ONLY when profit goes above $100.
