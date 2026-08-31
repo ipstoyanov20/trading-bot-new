@@ -74,7 +74,7 @@ def place_scalping_order(symbol, order_type):
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
     # 1.0 Fixed lots and no hard SL/TP on the broker order
-    lots = 1.0
+    lots = 0.7
     sl = 0.0
     tp = 0.0
         
@@ -115,10 +115,10 @@ def place_scalping_order(symbol, order_type):
     logger.error(f"Failed to place scalp order: {err} | Request: {request}")
     return False
 
-def monitor_profit_target(symbol, target_profit=100.0):
+def monitor_profit_target(symbol, target_profit=40.0):
     """
     Monitors all open bot positions for the symbol.
-    Closes the trade ONLY when profit goes above $100.
+    Closes the trade ONLY when profit reaches or goes above $40.
     Otherwise does not close the trade.
     Returns True if bot positions remain open, False otherwise.
     """
@@ -134,7 +134,7 @@ def monitor_profit_target(symbol, target_profit=100.0):
         ticket = p.ticket
         profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
         
-        # Close ONLY if floating profit >= $100
+        # Close ONLY if floating profit >= $40
         if profit >= target_profit:
             logger.info(f"🎯 Target Profit Hit for #{ticket}! Floating Profit: ${profit:.2f} >= ${target_profit:.2f}. Closing trade...")
             close_position_by_ticket(symbol, ticket)
@@ -149,7 +149,7 @@ def run_bot():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Scalping Bot on {TIMEFRAME} with 0.06 Lots ($100 TP Target)")
+    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Scalping Bot on {TIMEFRAME} with 0.7 Lots ($40 TP Target)")
     
     rules_checker = FundedAccountRules6k()
     
@@ -172,8 +172,8 @@ def run_bot():
             if check_3_consecutive_losses():
                 logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
-            # 3. Handle Open Positions & Monitor for $100 Profit Target
-            if monitor_profit_target(SYMBOL, target_profit=100.0):
+            # 3. Handle Open Positions & Monitor for $40 Profit Target
+            if monitor_profit_target(SYMBOL, target_profit=40.0):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
@@ -181,10 +181,10 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! Executing 0.06 Lots with $100 Profit Target (No Stop Loss)...")
+                logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! Executing 0.7 Lots with $40 Profit Target (No Stop Loss)...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
             elif signal == 'SELL':
-                logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! Executing 0.06 Lots with $100 Profit Target (No Stop Loss)...")
+                logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! Executing 0.7 Lots with $40 Profit Target (No Stop Loss)...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
                 
             time.sleep(SLEEP_INTERVAL)
