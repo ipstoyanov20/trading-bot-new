@@ -78,8 +78,8 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     # 1. 50 EMA > 200 EMA
     is_uptrend = (curr_ema_50 > curr_ema_200)
     
-    # 2. Stochastic is below 20 and K is above D (Aggressive) and RSI > 50 (Trend confirmation)
-    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d) and (curr_rsi > 50)
+    # 2. Stochastic is below 30 and K is above D (Aggressive)
+    stoch_buy_cross = (curr_k < 30) and (curr_k > curr_d)
     
     if is_uptrend and stoch_buy_cross:
         return 'BUY', curr_k
@@ -88,8 +88,8 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     # 1. 50 EMA < 200 EMA
     is_downtrend = (curr_ema_50 < curr_ema_200)
     
-    # 2. Stochastic is above 80 and K is below D (Aggressive) and RSI < 50 (Trend confirmation)
-    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d) and (curr_rsi < 50)
+    # 2. Stochastic is above 70 and K is below D (Aggressive)
+    stoch_sell_cross = (curr_k > 70) and (curr_k < curr_d)
     
     if is_downtrend and stoch_sell_cross:
         return 'SELL', curr_k

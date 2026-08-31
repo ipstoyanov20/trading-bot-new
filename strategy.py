@@ -68,12 +68,12 @@ def check_signal(symbol, timeframe):
     # Volatility Filter removed by user request (bot will now trade regardless of how flat the market is).
         
     # Momentum Logic
-    # Buy: Short EMA above Long EMA, Price above Short EMA, RSI > 50 (momentum up)
-    if curr_ema_short > curr_ema_long and df['close'].iloc[-1] > curr_ema_short and rsi > 50:
+    # Buy: Short EMA above Long EMA, Price above Short EMA
+    if curr_ema_short > curr_ema_long and df['close'].iloc[-1] > curr_ema_short:
         return 'BUY', atr
         
-    # Sell: Short EMA below Long EMA, Price below Short EMA, RSI < 50 (momentum down)
-    if curr_ema_short < curr_ema_long and df['close'].iloc[-1] < curr_ema_short and rsi < 50:
+    # Sell: Short EMA below Long EMA, Price below Short EMA
+    if curr_ema_short < curr_ema_long and df['close'].iloc[-1] < curr_ema_short:
         return 'SELL', atr
         
     return None, atr
