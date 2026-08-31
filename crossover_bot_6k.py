@@ -18,52 +18,7 @@ SYMBOL = "XAUUSD"          # Gold Scalping
 TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
 SLEEP_INTERVAL = 1         # 1 second for fast execution and alternative exit
 
-TELEGRAM_BOT_TOKEN = "8922725855:AAH5r_dnD2kRNsB0qb4iA-Tqdbrm35OXsEE"
-TELEGRAM_CHAT_ID = "7403380678"
-
 peak_profits = {}
-
-def get_chat_id_from_updates():
-    """Fetches the chat ID from recent bot messages."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    try:
-        response = requests.get(url).json()
-        if response.get("ok") and response.get("result"):
-            # Get the chat ID of the most recent message
-            return response["result"][-1]["message"]["chat"]["id"]
-    except Exception as e:
-        logger.error(f"Error fetching getUpdates: {e}")
-    return None
-
-def send_telegram_message(message):
-    """Sends a message via the Telegram Bot API."""
-    global TELEGRAM_CHAT_ID
-    
-    # Auto-fetch the chat ID if we don't have it
-    if TELEGRAM_CHAT_ID is None:
-        fetched_id = get_chat_id_from_updates()
-        if fetched_id:
-            TELEGRAM_CHAT_ID = fetched_id
-            logger.info(f"Auto-fetched Telegram Chat ID: {TELEGRAM_CHAT_ID}")
-        else:
-            logger.warning("Could not auto-fetch Chat ID. Make sure you have sent a message (like /start) to your bot first!")
-            return
-            
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-    try:
-        response = requests.post(url, json=payload)
-        if not response.ok:
-            logger.error(f"Failed to send Telegram message: {response.text}")
-            # If forbidden or chat not found, reset chat ID to try again next time
-            if response.status_code in [400, 403]:
-                TELEGRAM_CHAT_ID = None
-    except Exception as e:
-        logger.error(f"Exception sending Telegram message: {e}")
 
 def check_3_consecutive_losses():
     """Checks if the last 3 closed trades for today were losses."""
@@ -138,9 +93,6 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
             success = False
             
     if success:
-        action_str = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-        msg = f"🚀 **5 New Positions Opened**\n\n• **Symbol:** {symbol}\n• **Action:** {action_str}\n• **Price:** {price}\n• **Lots:** {lots} (x5)\n• **SL:** {sl}\n• **TP:** {tp}"
-        send_telegram_message(msg)
         return True
     return False
 
@@ -152,9 +104,6 @@ def run_bot():
         return
 
     logger.info(f"MT5 initialized. Started $6K XAUUSD Scalping Bot on {TIMEFRAME}")
-    
-    # Send a startup test message
-    send_telegram_message("🤖 **Trading Bot has started successfully and is monitoring the markets!**")
     
     rules_checker = FundedAccountRules6k()
     
