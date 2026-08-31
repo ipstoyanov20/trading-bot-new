@@ -74,7 +74,7 @@ def place_scalping_order(symbol, order_type):
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
     # 0.06 Fixed lots and no hard SL/TP on the broker order
-    lots = 0.06
+    lots = 0.1
     sl = 0.0
     tp = 0.0
         
