@@ -66,7 +66,7 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         tp = price - tp_dist if tp_dist > 0 else 0.0
         
     # Fixed lots
-    lots = 1.0
+    lots = 0.1
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -130,12 +130,12 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                # 5 pips SL (0.00050), 15 pips TP (0.00150) for Forex pairs like EURUSD
-                sl_dist, tp_dist = 0.00050, 0.00150 
+                # $20 SL (0.00200), $50 TP (0.00500) for 0.1 lots on EURUSD
+                sl_dist, tp_dist = 0.00200, 0.00500
                 logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
             elif signal == 'SELL':
-                sl_dist, tp_dist = 0.00050, 0.00150 
+                sl_dist, tp_dist = 0.00200, 0.00500
                 logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 

@@ -41,11 +41,11 @@ FIXED_TP_POINTS = 200          # 20 pips for EURUSD
 LOOP_INTERVAL_SECONDS = 10     # Interval to query MT5 for new candle updates
 
 # --- Simultaneous Orders Configuration ---
-FIXED_TP_PRICE_DIST = 0.0020   # Take Profit distance from entry price (20 pips)
-FIXED_SL_PRICE_DIST = 0.0010   # Stop Loss distance from entry price (10 pips)
+FIXED_TP_PRICE_DIST = 0.0050   # Take Profit distance from entry price ($50 for 0.1 lot on EURUSD)
+FIXED_SL_PRICE_DIST = 0.0020   # Stop Loss distance from entry price ($20 for 0.1 lot on EURUSD)
 
 # --- AI & ML Configuration ---
 RETRAIN_AFTER_N_TRADES = 10    # Retrain XGBoost after this many new trades (more frequent learning)
-AI_MIN_CONFIDENCE = 0.50       # Minimum confidence score to trade (0.50 means taking any trade direction AI favors)
+AI_MIN_CONFIDENCE = 0.55       # Minimum confidence score to trade (0.55)
 FIREBASE_CREDENTIALS_PATH = "firebase_credentials.json"
 
