@@ -89,7 +89,7 @@ def check_3_consecutive_losses():
     return False
 
 def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
-    """Places an order with Gemini-provided SL and TP for Gold."""
+    """Places an order with Strategy-provided SL and TP for Gold."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         logger.error(f"Symbol {symbol} not found.")
@@ -179,7 +179,7 @@ def run_bot():
                 
             # 3. Handle Open Positions (Wait for MT5 SL/TP or manual close)
             # Instant profit closing has been removed per user request.
-            # MT5 will automatically close positions when the Gemini-provided TP or SL is hit.
+            # MT5 will automatically close positions when the Strategy-provided TP or SL is hit.
             # We can simply sleep and let it run.
             if check_open_positions(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
