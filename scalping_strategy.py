@@ -14,13 +14,13 @@ def get_ohlc(symbol, timeframe, count=100):
     return df
 
 def calculate_indicators(df):
-    """Calculates EMA 50, EMA 200, and Stochastic (5, 3, 3)."""
-    if df.empty or len(df) < 200:
+    """Calculates EMA 9, EMA 21, and Stochastic (5, 3, 3)."""
+    if df.empty or len(df) < 25:
         return df
     
-    # Calculate EMAs
-    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+    # Fast Scalping EMAs (9 and 21)
+    df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['ema_slow'] = df['close'].ewm(span=21, adjust=False).mean()
     
     # Stochastic (5, 3, 3)
     k_period = 5
@@ -51,18 +51,18 @@ def calculate_indicators(df):
 
 def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     """
-    Evaluates scalping strategy logic for XAUUSD.
-    Returns: 'BUY', 'SELL', or None, and current stochastic_k for alternative exits.
+    Evaluates aggressive scalping strategy logic.
+    Returns: 'BUY', 'SELL', or None, and current stochastic_k.
     """
-    df = get_ohlc(symbol, timeframe, count=250)
-    if df.empty or len(df) < 205:
+    df = get_ohlc(symbol, timeframe, count=50)
+    if df.empty or len(df) < 25:
         return None, None
     
     df = calculate_indicators(df)
     
     curr_close = df['close'].iloc[-1]
-    curr_ema_50 = df['ema_50'].iloc[-1]
-    curr_ema_200 = df['ema_200'].iloc[-1]
+    curr_ema_fast = df['ema_fast'].iloc[-1]
+    curr_ema_slow = df['ema_slow'].iloc[-1]
     
     curr_k = df['stoch_k'].iloc[-1]
     curr_d = df['stoch_d'].iloc[-1]
@@ -71,27 +71,22 @@ def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     prev_d = df['stoch_d'].iloc[-2]
     
     # Logging
-    state = "BULLISH" if curr_ema_50 > curr_ema_200 else "BEARISH"
-    log_info(f"SCALP STATUS | {symbol} | Trend: {state} (50EMA: {curr_ema_50:.2f}, 200EMA: {curr_ema_200:.2f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f} | RSI: {curr_rsi:.1f}")
+    state = "BULLISH" if curr_ema_fast > curr_ema_slow else "BEARISH"
+    log_info(f"AGGRESSIVE SCALP | {symbol} | Trend: {state} (9EMA: {curr_ema_fast:.5f}, 21EMA: {curr_ema_slow:.5f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f} | RSI: {curr_rsi:.1f}")
 
-    # BUY LOGIC
-    # 1. 50 EMA > 200 EMA
-    is_uptrend = (curr_ema_50 > curr_ema_200)
-    
-    # 2. Stochastic is below 20 and K is above D (Aggressive) and RSI > 50 (Trend confirmation)
-    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d) and (curr_rsi > 50)
+    # AGGRESSIVE BUY LOGIC: Fast EMA > Slow EMA and Stochastic K > D
+    is_uptrend = (curr_ema_fast > curr_ema_slow)
+    stoch_buy_cross = (curr_k > curr_d and (prev_k <= prev_d or curr_k < 75))
     
     if is_uptrend and stoch_buy_cross:
         return 'BUY', curr_k
         
-    # SELL LOGIC
-    # 1. 50 EMA < 200 EMA
-    is_downtrend = (curr_ema_50 < curr_ema_200)
-    
-    # 2. Stochastic is above 80 and K is below D (Aggressive) and RSI < 50 (Trend confirmation)
-    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d) and (curr_rsi < 50)
+    # AGGRESSIVE SELL LOGIC: Fast EMA < Slow EMA and Stochastic K < D
+    is_downtrend = (curr_ema_fast < curr_ema_slow)
+    stoch_sell_cross = (curr_k < curr_d and (prev_k >= prev_d or curr_k > 25))
     
     if is_downtrend and stoch_sell_cross:
         return 'SELL', curr_k
 
     return None, curr_k
+

@@ -81,16 +81,13 @@ def check_signal(symbol, timeframe):
             confidence = 0.5001
         log_info(f"AI not trained yet. Fallback to EMA Trend: {signal} (EMA9: {curr_ema_short:.2f}, EMA21: {curr_ema_long:.2f})")
     else:
-        # AI is trained: compare probabilities and select the higher one with strict confidence > 0.55
-        if buy_confidence > 0.55 and buy_confidence > sell_confidence:
+        # AI is trained: compare probabilities and select the higher one aggressively
+        if buy_confidence >= sell_confidence:
             signal = 'BUY'
             confidence = buy_confidence
-        elif sell_confidence > 0.55 and sell_confidence > buy_confidence:
+        else:
             signal = 'SELL'
             confidence = sell_confidence
-        else:
-            signal = None
-            confidence = max(buy_confidence, sell_confidence)
         log_info(f"AI predictions - BUY: {buy_confidence*100:.1f}%, SELL: {sell_confidence*100:.1f}% -> Selected: {signal}")
         
     return signal, atr, last_completed_time, confidence, features_dict

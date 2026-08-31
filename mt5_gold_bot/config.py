@@ -20,7 +20,7 @@ EMA_LONG = 21                  # Slow EMA span
 # --- Risk Management ---
 RISK_PERCENT = 30.0            # Account equity percentage to risk per trade (highly aggressive for $50 account)
 MAX_LOT_SIZE = 2.0             # Absolute upper limit on trade lot size
-LOT_SIZE = 0.10                # Flat fallback lot size for maximum risk trading
+LOT_SIZE = 0.01                # Flat fallback lot size for maximum risk trading
 CLOSE_POSITION_ON_CANDLE_CLOSE = True  # Automatically close position at the end of the 15m candle
 
 # --- Stop Loss (SL) & Take Profit (TP) ---
@@ -38,14 +38,14 @@ FIXED_SL_POINTS = 100          # 10 pips for EURUSD (assuming 5 decimals)
 FIXED_TP_POINTS = 200          # 20 pips for EURUSD
 
 # --- General System Settings ---
-LOOP_INTERVAL_SECONDS = 10     # Interval to query MT5 for new candle updates
+LOOP_INTERVAL_SECONDS = 1      # 1-second loop interval for ultra-responsive trade execution and trailing profit monitoring
 
 # --- Simultaneous Orders Configuration ---
-FIXED_TP_PRICE_DIST = 0.0050   # Take Profit distance from entry price ($50 for 0.1 lot on EURUSD)
-FIXED_SL_PRICE_DIST = 0.0020   # Stop Loss distance from entry price ($20 for 0.1 lot on EURUSD)
+FIXED_TP_PRICE_DIST = 0.0500   # Take Profit distance from entry price ($50 for 0.01 lot on EURUSD)
+FIXED_SL_PRICE_DIST = 0.0200   # Stop Loss distance from entry price ($20 for 0.01 lot on EURUSD)
 
 # --- AI & ML Configuration ---
 RETRAIN_AFTER_N_TRADES = 10    # Retrain XGBoost after this many new trades (more frequent learning)
-AI_MIN_CONFIDENCE = 0.55       # Minimum confidence score to trade (0.55)
+AI_MIN_CONFIDENCE = 0.50       # Minimum confidence score to trade (aggressive entry)
 FIREBASE_CREDENTIALS_PATH = "firebase_credentials.json"
 

@@ -66,7 +66,7 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         tp = price - tp_dist if tp_dist > 0 else 0.0
         
     # Fixed lots
-    lots = 0.1
+    lots = 0.01
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -90,6 +90,56 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         err = mt5.last_error() if not res else res.comment
         logger.error(f"Failed to place scalp order: {err} | Request: {request}")
         return False
+
+def monitor_trailing_profits(symbol):
+    """
+    Monitors all open bot positions for the symbol.
+    If floating profit reaches $40 or more, tracks the peak profit.
+    If profit drops by $2 or more from its peak, closes the position to lock in profit.
+    Returns True if bot positions remain open, False otherwise.
+    """
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
+        return False
+
+    bot_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+    if not bot_positions:
+        peak_profits.clear()
+        return False
+
+    current_tickets = set()
+    for p in bot_positions:
+        ticket = p.ticket
+        current_tickets.add(ticket)
+        profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
+        
+        # Track peak profit
+        if ticket not in peak_profits:
+            peak_profits[ticket] = profit
+        else:
+            if profit > peak_profits[ticket]:
+                peak_profits[ticket] = profit
+                
+        # Trailing profit lock condition:
+        # Reached at least $40 profit and pulled back by $2
+        if peak_profits[ticket] >= 40.0:
+            drop_from_peak = peak_profits[ticket] - profit
+            if drop_from_peak >= 2.0:
+                logger.info(
+                    f"💰 Trailing Profit Lock Triggered for #{ticket}! "
+                    f"Peak Profit: ${peak_profits[ticket]:.2f}, Current Profit: ${profit:.2f} (Dropped ${drop_from_peak:.2f}). "
+                    f"Closing position..."
+                )
+                if close_position_by_ticket(symbol, ticket):
+                    peak_profits.pop(ticket, None)
+
+    # Clean up closed tickets from peak_profits
+    closed_tickets = [t for t in list(peak_profits.keys()) if t not in current_tickets]
+    for t in closed_tickets:
+        peak_profits.pop(t, None)
+
+    remaining_positions = mt5.positions_get(symbol=symbol)
+    return len([p for p in (remaining_positions or []) if p.magic == config.MAGIC_NUMBER]) > 0
 
 def run_bot():
     """Main loop for the $6K Funded Account EURUSD Scalping Bot"""
@@ -121,8 +171,8 @@ def run_bot():
             if check_3_consecutive_losses():
                 logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
-            # 3. Handle Open Positions
-            if check_open_positions(SYMBOL):
+            # 3. Handle Open Positions & Monitor Trailing Profit ($40 peak, $2 pullback)
+            if monitor_trailing_profits(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
@@ -130,12 +180,12 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                # $20 SL (0.00200), $50 TP (0.00500) for 0.1 lots on EURUSD
-                sl_dist, tp_dist = 0.00200, 0.00500
+                # $20 SL (0.02000), $50 TP (0.05000) for 0.01 lots on EURUSD
+                sl_dist, tp_dist = 0.02000, 0.05000
                 logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
             elif signal == 'SELL':
-                sl_dist, tp_dist = 0.00200, 0.00500
+                sl_dist, tp_dist = 0.02000, 0.05000
                 logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 

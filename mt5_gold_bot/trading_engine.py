@@ -278,3 +278,91 @@ def close_all_bot_positions(symbol):
             else:
                 log_info(f"Successfully closed position {ticket} (Profit: {pos.profit})")
 
+def close_position_by_ticket(symbol, ticket):
+    """
+    Closes a specific open position by its ticket number.
+    """
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        return False
+        
+    pos = positions[0]
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        log_error(f"Failed to get tick to close position {ticket}")
+        return False
+        
+    order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": pos.volume,
+        "type": order_type,
+        "position": ticket,
+        "price": price,
+        "deviation": config.DEVIATION,
+        "magic": config.MAGIC_NUMBER,
+        "comment": "Trailing Profit Close",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": get_filling_type(symbol),
+    }
+    
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        err = mt5.last_error() if result is None else result.comment
+        log_error(f"Failed to close position {ticket}: {err}")
+        return False
+    else:
+        log_info(f"Successfully closed position {ticket} (Profit: {pos.profit})")
+        return True
+
+def monitor_trailing_profits(symbol, peak_profits):
+    """
+    Monitors open positions for trailing profit lock ($40 peak, $2 pullback).
+    """
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
+        return False
+
+    bot_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+    if not bot_positions:
+        peak_profits.clear()
+        return False
+
+    current_tickets = set()
+    for p in bot_positions:
+        ticket = p.ticket
+        current_tickets.add(ticket)
+        profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
+        
+        # Track peak profit
+        if ticket not in peak_profits:
+            peak_profits[ticket] = profit
+        else:
+            if profit > peak_profits[ticket]:
+                peak_profits[ticket] = profit
+                
+        # Trailing profit lock condition:
+        # Reached at least $40 profit and pulled back by $2
+        if peak_profits[ticket] >= 40.0:
+            drop_from_peak = peak_profits[ticket] - profit
+            if drop_from_peak >= 2.0:
+                log_info(
+                    f"💰 Trailing Profit Lock Triggered for #{ticket}! "
+                    f"Peak Profit: ${peak_profits[ticket]:.2f}, Current Profit: ${profit:.2f} (Dropped ${drop_from_peak:.2f}). "
+                    f"Closing position..."
+                )
+                if close_position_by_ticket(symbol, ticket):
+                    peak_profits.pop(ticket, None)
+
+    # Clean up closed tickets from peak_profits
+    closed_tickets = [t for t in list(peak_profits.keys()) if t not in current_tickets]
+    for t in closed_tickets:
+        peak_profits.pop(t, None)
+
+    remaining_positions = mt5.positions_get(symbol=symbol)
+    return len([p for p in (remaining_positions or []) if p.magic == config.MAGIC_NUMBER]) > 0
+
+

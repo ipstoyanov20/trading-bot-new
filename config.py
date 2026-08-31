@@ -21,8 +21,8 @@ TELEGRAM_BOT_TOKEN = "8748248083:AAGva0e9L0TL1HHsKXwIk_2Fte5M2pocmmQ"
 TELEGRAM_CHANNELS = [-1003857703703]
 
 # --- EMA Crossover Strategy Settings ---
-EMA_SHORT = 9
-EMA_LONG = 21
+EMA_SHORT = 5
+EMA_LONG = 13
 
 # --- Risk Management ---
 RISK_PERCENT = 1.0  

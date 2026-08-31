@@ -3,8 +3,10 @@ import MetaTrader5 as mt5
 import config
 from logger import log_info, log_error
 from strategy import check_signal
-from trading_engine import initialize_mt5, check_open_positions, place_order, close_all_bot_positions
+from trading_engine import initialize_mt5, check_open_positions, place_order, close_all_bot_positions, monitor_trailing_profits
 from trade_tracker import update_trade_history
+
+peak_profits = {}
 
 def run_bot():
     """
@@ -99,8 +101,11 @@ def run_bot():
                     # Lock candle to prevent double processing
                     last_processed_candle = last_completed_time
             
-            # Wait before requesting rates again
-            time.sleep(config.LOOP_INTERVAL_SECONDS)
+            # Active 1-second monitoring loop for trailing profit lock ($40 peak, $2 pullback)
+            sleep_duration = max(1, int(config.LOOP_INTERVAL_SECONDS))
+            for _ in range(sleep_duration):
+                monitor_trailing_profits(config.SYMBOL, peak_profits)
+                time.sleep(1)
             
     except KeyboardInterrupt:
         log_info("Bot execution paused by user (KeyboardInterrupt).")
