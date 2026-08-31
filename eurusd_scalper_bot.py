@@ -60,7 +60,7 @@ def get_filling_type(symbol):
         return mt5.ORDER_FILLING_RETURN
 
 def place_scalping_order(symbol, order_type):
-    """Places an order with 0.06 lots and no SL/TP (managed dynamically at $100 profit)."""
+    """Places an order with fixed lots and $20 Stop Loss."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         logger.error(f"Symbol {symbol} not found.")
@@ -73,10 +73,24 @@ def place_scalping_order(symbol, order_type):
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     
-    # 1.0 Fixed lots and no hard SL/TP on the broker order
     lots = 2.0
-    sl = 0.0
-    tp = 0.0
+    
+    # Calculate $20 Stop Loss distance
+    tick_value = symbol_info.trade_tick_value
+    tick_size = symbol_info.trade_tick_size
+    if tick_value > 0 and tick_size > 0:
+        money_per_tick = lots * tick_value
+        sl_ticks = 20.0 / money_per_tick
+        sl_dist = sl_ticks * tick_size
+    else:
+        sl_dist = 20.0 / (lots * 100000.0) # Fallback for Forex EURUSD
+        
+    if order_type == mt5.ORDER_TYPE_BUY:
+        sl = price - sl_dist
+    else:
+        sl = price + sl_dist
+        
+    tp = 0.0 # Managed dynamically by monitor_profit_target
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -84,7 +98,7 @@ def place_scalping_order(symbol, order_type):
         "volume": float(lots),
         "type": order_type,
         "price": price,
-        "sl": float(sl),
+        "sl": float(round(sl, symbol_info.digits)),
         "tp": float(tp),
         "magic": config.MAGIC_NUMBER,
         "comment": "1M EURUSD Scalper",
@@ -94,7 +108,6 @@ def place_scalping_order(symbol, order_type):
     
     # Try preferred filling mode, and fallback to others if unsupported
     modes_to_try = [get_filling_type(symbol), mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN]
-    # Remove duplicates while preserving order
     unique_modes = []
     for m in modes_to_try:
         if m not in unique_modes:
@@ -105,7 +118,7 @@ def place_scalping_order(symbol, order_type):
         request["type_filling"] = mode
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            logger.info(f"Scalp Order Placed successfully with filling mode {mode}: {request}")
+            logger.info(f"Scalp Order Placed successfully with filling mode {mode} (SL: ${20} at {sl}): {request}")
             return True
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue  # Try next filling mode
@@ -116,11 +129,10 @@ def place_scalping_order(symbol, order_type):
     logger.error(f"Failed to place scalp order: {err} | Request: {request}")
     return False
 
-def monitor_profit_target(symbol, target_profit=50.0):
+def monitor_profit_target(symbol, target_profit=50.0, stop_loss=20.0):
     """
     Monitors all open bot positions for the symbol.
-    Closes the trade ONLY when profit goes above $100.
-    Otherwise does not close the trade.
+    Closes the trade when profit reaches target_profit ($50) OR loss reaches stop_loss ($20).
     Returns True if bot positions remain open, False otherwise.
     """
     positions = mt5.positions_get(symbol=symbol)
@@ -135,9 +147,13 @@ def monitor_profit_target(symbol, target_profit=50.0):
         ticket = p.ticket
         profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
         
-        # Close ONLY if floating profit >= $100
+        # Close if profit reaches target
         if profit >= target_profit:
             logger.info(f"🎯 Target Profit Hit for #{ticket}! Floating Profit: ${profit:.2f} >= ${target_profit:.2f}. Closing trade...")
+            close_position_by_ticket(symbol, ticket)
+        # Close if loss reaches $20 stop loss
+        elif profit <= -stop_loss:
+            logger.info(f"🛑 Stop Loss Hit for #{ticket}! Floating Loss: ${profit:.2f} <= -${stop_loss:.2f}. Closing trade...")
             close_position_by_ticket(symbol, ticket)
 
     remaining_positions = mt5.positions_get(symbol=symbol)
