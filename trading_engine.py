@@ -28,6 +28,47 @@ def get_portfolio_pnl(symbol):
         return 0.0
     return sum([p.profit for p in positions if p.magic == config.MAGIC_NUMBER])
 
+def get_filling_type(symbol):
+    """
+    Dynamically determines the correct execution filling mode supported by the broker.
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return mt5.ORDER_FILLING_FOK
+        
+    filling_mode = getattr(symbol_info, 'filling_mode', 0)
+    if filling_mode & 1:  # FOK supported
+        return mt5.ORDER_FILLING_FOK
+    elif filling_mode & 2:  # IOC supported
+        return mt5.ORDER_FILLING_IOC
+    else:
+        return mt5.ORDER_FILLING_RETURN
+
+def send_order_safe(request):
+    """
+    Sends order to MT5 with automatic fallback across all supported filling modes
+    (FOK, IOC, RETURN) if broker returns 'Unsupported filling mode' (10030).
+    """
+    symbol = request.get("symbol")
+    modes_to_try = [get_filling_type(symbol), mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN]
+    unique_modes = []
+    for m in modes_to_try:
+        if m not in unique_modes:
+            unique_modes.append(m)
+            
+    res = None
+    for mode in unique_modes:
+        req = request.copy()
+        req["type_filling"] = mode
+        res = mt5.order_send(req)
+        if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            return res
+        elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
+            continue
+        else:
+            break
+    return res
+
 def close_all_positions(symbol):
     """Closes all open positions for the bot's magic number."""
     positions = mt5.positions_get(symbol=symbol)
@@ -57,10 +98,10 @@ def close_all_positions(symbol):
             "magic": config.MAGIC_NUMBER,
             "comment": "Portfolio Close",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": get_filling_type(symbol),
         }
         
-        result = mt5.order_send(request)
+        result = send_order_safe(request)
         if result is None or result.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
             success = False
             log_error(f"Failed to close position {p.ticket}: {mt5.last_error() if result is None else result.comment}")
@@ -94,10 +135,10 @@ def close_position_by_ticket(symbol, ticket):
         "magic": config.MAGIC_NUMBER,
         "comment": "Close by Ticket",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": get_filling_type(symbol),
     }
     
-    result = mt5.order_send(request)
+    result = send_order_safe(request)
     if result is None or result.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
         log_error(f"Failed to close position {p.ticket}: {mt5.last_error() if result is None else result.comment}")
         return False
@@ -218,7 +259,7 @@ def place_order(symbol, order_type, atr=None):
         "magic": config.MAGIC_NUMBER,
         "comment": "MT5 Python Bot",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": get_filling_type(symbol),
     }
     
     print(f"--- DIAGNOSTICS: Built Request: {request} ---")
@@ -227,19 +268,14 @@ def place_order(symbol, order_type, atr=None):
     check_res = mt5.order_check(request)
     print(f"--- DIAGNOSTICS: order_check returned: {check_res} ---")
     
-    if check_res is None:
-        print(f"--- DIAGNOSTICS: order_check returned None! MT5 Last Error: {mt5.last_error()} ---")
-        return None
-        
-    # order_check returns 0 for success, not 10009 (TRADE_RETCODE_DONE)
-    if check_res.retcode != 0:
+    if check_res is not None and check_res.retcode != 0 and check_res.retcode not in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
         print(f"--- DIAGNOSTICS: order_check failed! Retcode: {check_res.retcode}, Comment: {check_res.comment} ---")
         log_error(f"Order check failed for {symbol}: {check_res.comment}")
         return None
 
     print("--- DIAGNOSTICS: Sending order... ---")
-    # Execute the trade
-    result = mt5.order_send(request)
+    # Execute the trade with filling fallback
+    result = send_order_safe(request)
     print(f"--- DIAGNOSTICS: order_send returned: {result} ---")
     
     if result is None:
@@ -321,11 +357,11 @@ def execute_signal(signal_data):
         "magic": config.MAGIC_NUMBER,
         "comment": "Telegram Signal TP1",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": get_filling_type(symbol),
     }
     
-    result = mt5.order_send(request)
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+    result = send_order_safe(request)
+    if result and result.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
         log_trade(symbol, f"{order_type_str} TP1", total_lots, price, sl, tp, "SUCCESS")
         return result
     else:

@@ -43,8 +43,24 @@ def check_3_consecutive_losses():
             return True
     return False
 
+def get_filling_type(symbol):
+    """
+    Dynamically determines the correct execution filling mode supported by the broker.
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return mt5.ORDER_FILLING_FOK
+        
+    filling_mode = getattr(symbol_info, 'filling_mode', 0)
+    if filling_mode & 1:  # FOK supported
+        return mt5.ORDER_FILLING_FOK
+    elif filling_mode & 2:  # IOC supported
+        return mt5.ORDER_FILLING_IOC
+    else:
+        return mt5.ORDER_FILLING_RETURN
+
 def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
-    """Places an order with Strategy-provided SL and TP for Gold."""
+    """Places an order with Strategy-provided SL and TP for Gold, supporting all broker filling modes."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         logger.error(f"Symbol {symbol} not found.")
@@ -66,7 +82,7 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         tp = price - tp_dist if tp_dist > 0 else 0.0
         
     # Fixed lots
-    lots = 1.0
+    lots = 0.01
         
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -79,17 +95,81 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         "magic": config.MAGIC_NUMBER,
         "comment": "1M Scalper Bot",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": get_filling_type(symbol),
     }
     
-    res = mt5.order_send(request)
-    if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-        logger.info(f"Scalp Order Placed successfully: {request}")
-        return True
-    else:
-        err = mt5.last_error() if not res else res.comment
-        logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+    # Try preferred filling mode, and fallback to others if unsupported
+    modes_to_try = [get_filling_type(symbol), mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN]
+    unique_modes = []
+    for m in modes_to_try:
+        if m not in unique_modes:
+            unique_modes.append(m)
+            
+    res = None
+    for mode in unique_modes:
+        request["type_filling"] = mode
+        res = mt5.order_send(request)
+        if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            logger.info(f"Scalp Order Placed successfully with filling mode {mode}: {request}")
+            return True
+        elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
+            continue  # Try next filling mode
+        else:
+            break
+            
+    err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
+    logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+    return False
+
+def monitor_trailing_profits(symbol):
+    """
+    Monitors all open bot positions for the symbol.
+    If floating profit reaches $40 or more, tracks the peak profit.
+    If profit drops by $2 or more from its peak, closes the position to lock in profit.
+    Returns True if bot positions remain open, False otherwise.
+    """
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
         return False
+
+    bot_positions = [p for p in positions if p.magic == config.MAGIC_NUMBER]
+    if not bot_positions:
+        peak_profits.clear()
+        return False
+
+    current_tickets = set()
+    for p in bot_positions:
+        ticket = p.ticket
+        current_tickets.add(ticket)
+        profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
+        
+        # Track peak profit
+        if ticket not in peak_profits:
+            peak_profits[ticket] = profit
+        else:
+            if profit > peak_profits[ticket]:
+                peak_profits[ticket] = profit
+                
+        # Trailing profit lock condition:
+        # Reached at least $40 profit and pulled back by $2
+        if peak_profits[ticket] >= 40.0:
+            drop_from_peak = peak_profits[ticket] - profit
+            if drop_from_peak >= 2.0:
+                logger.info(
+                    f"💰 Trailing Profit Lock Triggered for #{ticket}! "
+                    f"Peak Profit: ${peak_profits[ticket]:.2f}, Current Profit: ${profit:.2f} (Dropped ${drop_from_peak:.2f}). "
+                    f"Closing position..."
+                )
+                if close_position_by_ticket(symbol, ticket):
+                    peak_profits.pop(ticket, None)
+
+    # Clean up closed tickets from peak_profits
+    closed_tickets = [t for t in list(peak_profits.keys()) if t not in current_tickets]
+    for t in closed_tickets:
+        peak_profits.pop(t, None)
+
+    remaining_positions = mt5.positions_get(symbol=symbol)
+    return len([p for p in (remaining_positions or []) if p.magic == config.MAGIC_NUMBER]) > 0
 
 def run_bot():
     """Main loop for the $6K Funded Account XAUUSD Scalping Bot"""
@@ -98,7 +178,7 @@ def run_bot():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized. Started $6K XAUUSD Scalping Bot on {TIMEFRAME}")
+    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Scalping Bot on {TIMEFRAME}")
     
     rules_checker = FundedAccountRules6k()
     
@@ -121,11 +201,8 @@ def run_bot():
             if check_3_consecutive_losses():
                 logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
-            # 3. Handle Open Positions (Wait for MT5 SL/TP or manual close)
-            # Instant profit closing has been removed per user request.
-            # MT5 will automatically close positions when the Strategy-provided TP or SL is hit.
-            # We can simply sleep and let it run.
-            if check_open_positions(SYMBOL):
+            # 3. Handle Open Positions & Monitor Trailing Profit ($40 peak, $2 pullback)
+            if monitor_trailing_profits(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
@@ -133,11 +210,13 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                sl_dist, tp_dist = 1.0, 3.0 # Strict SL and TP distances
+                # $20 SL (20.0), $50 TP (50.0) for 0.01 lots on XAUUSD
+                sl_dist, tp_dist = 20.0, 50.0
                 logger.info(f"🟢 BUY SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY, sl_dist, tp_dist)
             elif signal == 'SELL':
-                sl_dist, tp_dist = 1.0, 3.0 # Strict SL and TP distances
+                # $20 SL (20.0), $50 TP (50.0) for 0.01 lots on XAUUSD
+                sl_dist, tp_dist = 20.0, 50.0
                 logger.info(f"🔴 SELL SIGNAL for {SYMBOL}! SL: {sl_dist}, TP: {tp_dist}")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL, sl_dist, tp_dist)
                 

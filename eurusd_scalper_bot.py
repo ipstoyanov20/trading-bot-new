@@ -43,8 +43,24 @@ def check_3_consecutive_losses():
             return True
     return False
 
+def get_filling_type(symbol):
+    """
+    Dynamically determines the correct execution filling mode supported by the broker.
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return mt5.ORDER_FILLING_FOK
+        
+    filling_mode = getattr(symbol_info, 'filling_mode', 0)
+    if filling_mode & 1:  # FOK supported
+        return mt5.ORDER_FILLING_FOK
+    elif filling_mode & 2:  # IOC supported
+        return mt5.ORDER_FILLING_IOC
+    else:
+        return mt5.ORDER_FILLING_RETURN
+
 def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
-    """Places an order with Strategy-provided SL and TP."""
+    """Places an order with Strategy-provided SL and TP, supporting all broker filling modes."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
         logger.error(f"Symbol {symbol} not found.")
@@ -79,17 +95,32 @@ def place_scalping_order(symbol, order_type, sl_dist, tp_dist):
         "magic": config.MAGIC_NUMBER,
         "comment": "1M EURUSD Scalper",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": get_filling_type(symbol),
     }
     
-    res = mt5.order_send(request)
-    if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-        logger.info(f"Scalp Order Placed successfully: {request}")
-        return True
-    else:
-        err = mt5.last_error() if not res else res.comment
-        logger.error(f"Failed to place scalp order: {err} | Request: {request}")
-        return False
+    # Try preferred filling mode, and fallback to others if unsupported
+    modes_to_try = [get_filling_type(symbol), mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN]
+    # Remove duplicates while preserving order
+    unique_modes = []
+    for m in modes_to_try:
+        if m not in unique_modes:
+            unique_modes.append(m)
+            
+    res = None
+    for mode in unique_modes:
+        request["type_filling"] = mode
+        res = mt5.order_send(request)
+        if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            logger.info(f"Scalp Order Placed successfully with filling mode {mode}: {request}")
+            return True
+        elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
+            continue  # Try next filling mode
+        else:
+            break  # Other error, stop
+            
+    err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
+    logger.error(f"Failed to place scalp order: {err} | Request: {request}")
+    return False
 
 def monitor_trailing_profits(symbol):
     """
