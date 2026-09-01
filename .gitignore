@@ -1,4 +1,5 @@
 .log
-.pyc
+*.pyc
+__pycache__/
 config_secrets.py
 firebase_credentials.json

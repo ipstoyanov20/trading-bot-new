@@ -19,12 +19,8 @@ TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
 SLEEP_INTERVAL = 1         # 1 second for fast execution and monitoring
 LOT_SIZE = 2.0             # Trading volume
 
-# Stop Loss and Take Profit Settings for EURUSD (SL is 3x smaller than TP -> 1:3 Risk:Reward)
-SL_PRICE_DIST = 0.00050    # 5 pips (50 points) for Stop Loss
-TP_PRICE_DIST = 0.00150    # 15 pips (150 points) for Take Profit (3x SL)
-
-TARGET_PROFIT_USD = 90.0   # Take Profit dollar target
-STOP_LOSS_USD = -30.0      # Stop Loss dollar target (3x smaller than TP)
+# Risk & Loss Settings
+STOP_LOSS_EUR = -5.0       # Terminate position strictly at 5 EUR loss (-5.0)
 
 peak_profits = {}
 
@@ -69,7 +65,7 @@ def get_filling_type(symbol):
 
 def place_scalping_order(symbol, order_type):
     """
-    Places an order for EURUSD with SL 3 times smaller than TP (1:3 Risk:Reward).
+    Places an order for EURUSD allowing profits to run upwards while monitored for a strict -5 EUR stop loss.
     """
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -82,26 +78,17 @@ def place_scalping_order(symbol, order_type):
         return False
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-    digits = getattr(symbol_info, 'digits', 5)
     
-    # Calculate SL and TP prices (SL is 3x smaller than TP)
-    if order_type == mt5.ORDER_TYPE_BUY:
-        sl = round(price - SL_PRICE_DIST, digits)
-        tp = round(price + TP_PRICE_DIST, digits)
-    else:
-        sl = round(price + SL_PRICE_DIST, digits)
-        tp = round(price - TP_PRICE_DIST, digits)
-        
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": float(LOT_SIZE),
         "type": order_type,
         "price": price,
-        "sl": float(sl),
-        "tp": float(tp),
+        "sl": 0.0,
+        "tp": 0.0,  # Uncapped TP to let profits run upwards freely
         "magic": config.MAGIC_NUMBER,
-        "comment": "1M Stoch EURUSD (1:3 RR)",
+        "comment": "1M Stoch EURUSD (Runner)",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": get_filling_type(symbol),
     }
@@ -119,7 +106,7 @@ def place_scalping_order(symbol, order_type):
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
             action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-            logger.info(f"✅ {action_name} Order Placed successfully for {symbol} | Price: {price}, SL: {sl}, TP: {tp} (Filling: {mode})")
+            logger.info(f"✅ {action_name} Order Placed successfully for {symbol} | Price: {price} | Running with 5 EUR Stop Loss (Filling: {mode})")
             return True
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue  # Try next filling mode
@@ -130,10 +117,11 @@ def place_scalping_order(symbol, order_type):
     logger.error(f"Failed to place scalp order: {err} | Request: {request}")
     return False
 
-def monitor_positions(symbol, target_profit=TARGET_PROFIT_USD, max_loss=STOP_LOSS_USD):
+def monitor_positions(symbol, max_loss=STOP_LOSS_EUR):
     """
     Monitors all open bot positions for EURUSD.
-    Closes the trade if floating profit reaches TP ($90) or SL (-$30).
+    Terminates trade immediately if loss reaches 5 EUR (profit <= -5.0).
+    Otherwise lets the trade run upwards freely.
     Returns True if bot positions remain open, False otherwise.
     """
     positions = mt5.positions_get(symbol=symbol)
@@ -148,14 +136,12 @@ def monitor_positions(symbol, target_profit=TARGET_PROFIT_USD, max_loss=STOP_LOS
         ticket = p.ticket
         profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
         
-        # Take Profit Check
-        if profit >= target_profit:
-            logger.info(f"🎯 Target Profit Hit for #{ticket}! Floating Profit: ${profit:.2f} >= ${target_profit:.2f}. Closing trade...")
+        # Strict Stop Loss Check: terminate immediately at 5 EUR loss
+        if profit <= max_loss:
+            logger.info(f"🛑 Stop Loss Hit for #{ticket}! Floating PnL: {profit:.2f} <= {max_loss:.2f} (5 EUR loss limit). Terminating position immediately...")
             close_position_by_ticket(symbol, ticket)
-        # Stop Loss Check (3x smaller than TP)
-        elif profit <= max_loss:
-            logger.info(f"🛑 Stop Loss Hit for #{ticket}! Floating Profit: ${profit:.2f} <= ${max_loss:.2f}. Closing trade...")
-            close_position_by_ticket(symbol, ticket)
+        elif profit > 0:
+            logger.info(f"📈 #{ticket} Running in Profit: +{profit:.2f} (allowing trade to run upwards)")
 
     remaining_positions = mt5.positions_get(symbol=symbol)
     return len([p for p in (remaining_positions or []) if p.magic == config.MAGIC_NUMBER]) > 0
@@ -167,7 +153,7 @@ def run_bot():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Pure Stochastic Bot on {TIMEFRAME} | Volume: {LOT_SIZE} | SL: ${abs(STOP_LOSS_USD)} / TP: ${TARGET_PROFIT_USD} (1:3 RR)")
+    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Pure Stochastic Bot on {TIMEFRAME} | Volume: {LOT_SIZE} | Strict Stop Loss: 5 EUR | Profit Runner (No TP cap)")
     
     rules_checker = FundedAccountRules6k()
     
@@ -190,7 +176,7 @@ def run_bot():
             if check_3_consecutive_losses():
                 logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
                 
-            # 3. Handle Open Positions & Monitor for TP/SL Targets
+            # 3. Handle Open Positions & Monitor for -5 EUR Stop Loss / Running Profit
             if monitor_positions(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
@@ -199,10 +185,10 @@ def run_bot():
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                logger.info(f"🟢 STOCH BUY SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots with SL ${abs(STOP_LOSS_USD)} and TP ${TARGET_PROFIT_USD} (1:3 RR)...")
+                logger.info(f"🟢 STOCH BUY SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (Stop Loss: 5 EUR, Profit Runner)...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
             elif signal == 'SELL':
-                logger.info(f"🔴 STOCH SELL SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots with SL ${abs(STOP_LOSS_USD)} and TP ${TARGET_PROFIT_USD} (1:3 RR)...")
+                logger.info(f"🔴 STOCH SELL SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (Stop Loss: 5 EUR, Profit Runner)...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
                 
             time.sleep(SLEEP_INTERVAL)
