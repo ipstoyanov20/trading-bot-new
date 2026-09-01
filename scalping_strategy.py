@@ -13,24 +13,18 @@ def get_ohlc(symbol, timeframe, count=100):
     df.set_index('time', inplace=True)
     return df
 
-def calculate_indicators(df):
-    """Calculates EMA 50, EMA 200, Stochastic (5, 3, 3), and RSI (14)."""
-    if df.empty or len(df) < 200:
+def calculate_indicators(df, k_period=5, d_period=3, slowing=3):
+    """Calculates pure Stochastic Oscillator (%K, %D)."""
+    if df.empty or len(df) < (k_period + slowing + d_period):
         return df
     
-    # EMAs for Trend Filtering
-    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
-    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
-    
-    # Stochastic (5, 3, 3)
-    k_period = 5
-    d_period = 3
-    slowing = 3
-
     # Fast %K
     lowest_low = df['low'].rolling(window=k_period).min()
     highest_high = df['high'].rolling(window=k_period).max()
-    df['fast_k'] = 100 * ((df['close'] - lowest_low) / (highest_high - lowest_low))
+    
+    # Avoid division by zero
+    diff = highest_high - lowest_low
+    df['fast_k'] = 100 * ((df['close'] - lowest_low) / diff.replace(0, 0.00001))
     
     # Smoothed %K (Slow %K)
     df['stoch_k'] = df['fast_k'].rolling(window=slowing).mean()
@@ -38,54 +32,47 @@ def calculate_indicators(df):
     # %D (SMA of Slow %K)
     df['stoch_d'] = df['stoch_k'].rolling(window=d_period).mean()
     
-    # Calculate RSI (14) using EMA
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    
     return df
 
 def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     """
-    Evaluates disciplined, high-quality scalping strategy logic.
+    Evaluates pure Stochastic strategy logic without additional filters.
+    BUY: %K crosses above %D in/from oversold zone (<= 20).
+    SELL: %K crosses below %D in/from overbought zone (>= 80).
     Returns: 'BUY', 'SELL', or None, and current stochastic_k.
     """
-    df = get_ohlc(symbol, timeframe, count=250)
-    if df.empty or len(df) < 205:
+    df = get_ohlc(symbol, timeframe, count=100)
+    if df.empty or len(df) < 20:
         return None, None
     
     df = calculate_indicators(df)
     
-    curr_close = df['close'].iloc[-1]
-    curr_ema_50 = df['ema_50'].iloc[-1]
-    curr_ema_200 = df['ema_200'].iloc[-1]
-    
     curr_k = df['stoch_k'].iloc[-1]
     curr_d = df['stoch_d'].iloc[-1]
-    curr_rsi = df['rsi'].iloc[-1]
     prev_k = df['stoch_k'].iloc[-2]
     prev_d = df['stoch_d'].iloc[-2]
     
-    # Logging
-    state = "BULLISH" if curr_ema_50 > curr_ema_200 else "BEARISH"
-    log_info(f"SCALP STATUS | {symbol} | Trend: {state} (50EMA: {curr_ema_50:.5f}, 200EMA: {curr_ema_200:.5f}) | Stoch K: {curr_k:.1f} D: {curr_d:.1f} | RSI: {curr_rsi:.1f}")
+    # Status Logging
+    zone = "NORMAL"
+    if curr_k <= 20:
+        zone = "OVERSOLD (<= 20)"
+    elif curr_k >= 80:
+        zone = "OVERBOUGHT (>= 80)"
+        
+    log_info(f"STOCH STATUS | {symbol} | %K: {curr_k:.1f}, %D: {curr_d:.1f} (Prev %K: {prev_k:.1f}, %D: {prev_d:.1f}) | Zone: {zone}")
 
-    # BUY LOGIC: 50 EMA > 200 EMA, Stochastic oversold (< 20) crossing up, RSI > 50
-    is_uptrend = (curr_ema_50 > curr_ema_200)
-    stoch_buy_cross = (curr_k < 20) and (curr_k > curr_d) and (curr_rsi > 50)
+    # BUY LOGIC: Stochastic oversold crossing up
+    # Either fresh cross (prev_k <= prev_d and curr_k > curr_d) in/near oversold zone (<= 25) or actively oversold and %K > %D
+    stoch_buy_cross = (prev_k <= prev_d and curr_k > curr_d and (prev_k <= 25 or curr_k <= 25)) or (curr_k <= 20 and curr_k > curr_d)
     
-    if is_uptrend and stoch_buy_cross:
+    if stoch_buy_cross:
         return 'BUY', curr_k
         
-    # SELL LOGIC: 50 EMA < 200 EMA, Stochastic overbought (> 80) crossing down, RSI < 50
-    is_downtrend = (curr_ema_50 < curr_ema_200)
-    stoch_sell_cross = (curr_k > 80) and (curr_k < curr_d) and (curr_rsi < 50)
+    # SELL LOGIC: Stochastic overbought crossing down
+    # Either fresh cross (prev_k >= prev_d and curr_k < curr_d) in/near overbought zone (>= 75) or actively overbought and %K < %D
+    stoch_sell_cross = (prev_k >= prev_d and curr_k < curr_d and (prev_k >= 75 or curr_k >= 75)) or (curr_k >= 80 and curr_k < curr_d)
     
-    if is_downtrend and stoch_sell_cross:
+    if stoch_sell_cross:
         return 'SELL', curr_k
 
     return None, curr_k
