@@ -14,9 +14,13 @@ def get_ohlc(symbol, timeframe, count=100):
     return df
 
 def calculate_indicators(df, k_period=5, d_period=3, slowing=3):
-    """Calculates pure Stochastic Oscillator (%K, %D)."""
-    if df.empty or len(df) < (k_period + slowing + d_period):
+    """Calculates EMA 50, EMA 200, and Stochastic (%K, %D)."""
+    if df.empty or len(df) < 50:
         return df
+    
+    # EMAs for Trend Filtering
+    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
     
     # Fast %K
     lowest_low = df['low'].rolling(window=k_period).min()
@@ -36,43 +40,43 @@ def calculate_indicators(df, k_period=5, d_period=3, slowing=3):
 
 def check_scalping_signal(symbol, timeframe=mt5.TIMEFRAME_M1):
     """
-    Evaluates pure Stochastic strategy logic without additional filters.
-    BUY: %K crosses above %D in/from oversold zone (<= 20).
-    SELL: %K crosses below %D in/from overbought zone (>= 80).
+    High-Winrate Trend-Following Pullback Strategy:
+    - BUY: Uptrend (Close > EMA50 > EMA200) + Stochastic pullback oversold (<= 25) crossing up.
+    - SELL: Downtrend (Close < EMA50 < EMA200) + Stochastic pullback overbought (>= 75) crossing down.
     Returns: 'BUY', 'SELL', or None, and current stochastic_k.
     """
-    df = get_ohlc(symbol, timeframe, count=100)
-    if df.empty or len(df) < 20:
+    df = get_ohlc(symbol, timeframe, count=250)
+    if df.empty or len(df) < 205:
         return None, None
     
     df = calculate_indicators(df)
+    
+    # Indicators on closed candle (iloc[-2]) and latest (iloc[-1])
+    curr_close = df['close'].iloc[-1]
+    curr_ema_50 = df['ema_50'].iloc[-1]
+    curr_ema_200 = df['ema_200'].iloc[-1]
     
     curr_k = df['stoch_k'].iloc[-1]
     curr_d = df['stoch_d'].iloc[-1]
     prev_k = df['stoch_k'].iloc[-2]
     prev_d = df['stoch_d'].iloc[-2]
     
-    # Status Logging
-    zone = "NORMAL"
-    if curr_k <= 20:
-        zone = "OVERSOLD (<= 20)"
-    elif curr_k >= 80:
-        zone = "OVERBOUGHT (>= 80)"
-        
-    log_info(f"STOCH STATUS | {symbol} | %K: {curr_k:.1f}, %D: {curr_d:.1f} (Prev %K: {prev_k:.1f}, %D: {prev_d:.1f}) | Zone: {zone}")
-
-    # BUY LOGIC: Stochastic oversold crossing up
-    # Either fresh cross (prev_k <= prev_d and curr_k > curr_d) in/near oversold zone (<= 25) or actively oversold and %K > %D
-    stoch_buy_cross = (prev_k <= prev_d and curr_k > curr_d and (prev_k <= 25 or curr_k <= 25)) or (curr_k <= 20 and curr_k > curr_d)
+    # Trend Analysis
+    is_uptrend = (curr_close >= curr_ema_50) and (curr_ema_50 > curr_ema_200)
+    is_downtrend = (curr_close <= curr_ema_50) and (curr_ema_50 < curr_ema_200)
     
-    if stoch_buy_cross:
+    trend_str = "BULLISH 🟢" if is_uptrend else ("BEARISH 🔴" if is_downtrend else "SIDEWAYS / FLAT ⚪")
+    
+    log_info(f"STRATEGY STATUS | {symbol} | Trend: {trend_str} (50EMA: {curr_ema_50:.4f}, 200EMA: {curr_ema_200:.4f}) | Stoch %K: {curr_k:.1f}, %D: {curr_d:.1f}")
+
+    # BUY LOGIC: Only buy in strong uptrend on stochastic oversold crossover
+    stoch_buy_cross = (prev_k <= prev_d and curr_k > curr_d and (prev_k <= 25 or curr_k <= 25))
+    if is_uptrend and stoch_buy_cross:
         return 'BUY', curr_k
         
-    # SELL LOGIC: Stochastic overbought crossing down
-    # Either fresh cross (prev_k >= prev_d and curr_k < curr_d) in/near overbought zone (>= 75) or actively overbought and %K < %D
-    stoch_sell_cross = (prev_k >= prev_d and curr_k < curr_d and (prev_k >= 75 or curr_k >= 75)) or (curr_k >= 80 and curr_k < curr_d)
-    
-    if stoch_sell_cross:
+    # SELL LOGIC: Only sell in strong downtrend on stochastic overbought crossover
+    stoch_sell_cross = (prev_k >= prev_d and curr_k < curr_d and (prev_k >= 75 or curr_k >= 75))
+    if is_downtrend and stoch_sell_cross:
         return 'SELL', curr_k
 
     return None, curr_k

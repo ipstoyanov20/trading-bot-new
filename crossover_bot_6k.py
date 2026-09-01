@@ -17,10 +17,17 @@ logger = logging.getLogger(__name__)
 SYMBOL = "XAUUSD"          # Gold Scalping
 TIMEFRAME = mt5.TIMEFRAME_M1 # 1-Minute timeframe
 SLEEP_INTERVAL = 1         # 1 second for fast execution and monitoring
-LOT_SIZE = 0.7             # Trading volume
+LOT_SIZE = 0.10            # Calibrated volume (0.10 lot = $10/point move, ~$0.20 spread)
+COOLDOWN_SECONDS = 60      # 1-minute cooldown after trade exit
 
-# Risk & Loss Settings
-STOP_LOSS_EUR = -5.0       # Terminate position strictly at 5 EUR loss (-5.0)
+# 1:3 Risk-to-Reward Settings (1 Win ($90) recovers 3 Losses ($30 each))
+SL_PRICE_DIST = 3.0        # $3.00 Gold price move for Stop Loss
+TP_PRICE_DIST = 9.0        # $9.00 Gold price move for Take Profit (3x SL)
+
+STOP_LOSS_USD = -30.0      # Stop Loss dollar limit
+TARGET_PROFIT_USD = 90.0   # Take Profit dollar target
+
+last_close_time = 0        # Timestamp of last closed position
 
 peak_profits = {}
 
@@ -65,7 +72,7 @@ def get_filling_type(symbol):
 
 def place_scalping_order(symbol, order_type):
     """
-    Places an order for Gold (XAUUSD) allowing profits to run upwards while monitored for a strict -5 EUR stop loss.
+    Places an order for Gold (XAUUSD) with 1:3 RR (SL $3.00 / TP $9.00).
     """
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -78,6 +85,14 @@ def place_scalping_order(symbol, order_type):
         return False
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+    digits = getattr(symbol_info, 'digits', 2)
+    
+    if order_type == mt5.ORDER_TYPE_BUY:
+        sl = round(price - SL_PRICE_DIST, digits)
+        tp = round(price + TP_PRICE_DIST, digits)
+    else:
+        sl = round(price + SL_PRICE_DIST, digits)
+        tp = round(price - TP_PRICE_DIST, digits)
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -85,10 +100,10 @@ def place_scalping_order(symbol, order_type):
         "volume": float(LOT_SIZE),
         "type": order_type,
         "price": price,
-        "sl": 0.0,
-        "tp": 0.0,  # Uncapped TP to let profits run upwards freely
+        "sl": float(sl),
+        "tp": float(tp),
         "magic": config.MAGIC_NUMBER,
-        "comment": "1M Stoch Gold (Runner)",
+        "comment": "1M Stoch Trend (1:3 RR)",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": get_filling_type(symbol),
     }
@@ -106,7 +121,7 @@ def place_scalping_order(symbol, order_type):
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
             action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-            logger.info(f"✅ {action_name} Order Placed successfully for {symbol} | Price: {price} | Running with 5 EUR Stop Loss (Filling: {mode})")
+            logger.info(f"✅ {action_name} Order Placed successfully for {symbol} | Price: {price} | SL: {sl} | TP: {tp} (Filling: {mode})")
             return True
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue  # Try next filling mode
@@ -117,13 +132,13 @@ def place_scalping_order(symbol, order_type):
     logger.error(f"Failed to place scalp order: {err} | Request: {request}")
     return False
 
-def monitor_positions(symbol, max_loss=STOP_LOSS_EUR):
+def monitor_positions(symbol, target_profit=TARGET_PROFIT_USD, max_loss=STOP_LOSS_USD):
     """
-    Monitors all open bot positions for XAUUSD.
-    Terminates trade immediately if loss reaches 5 EUR (profit <= -5.0).
-    Otherwise lets the trade run upwards freely.
+    Monitors open positions for XAUUSD.
+    Closes trade if TP ($90) or SL (-$30) is reached, and updates cooldown timestamp.
     Returns True if bot positions remain open, False otherwise.
     """
+    global last_close_time
     positions = mt5.positions_get(symbol=symbol)
     if positions is None:
         return False
@@ -136,24 +151,29 @@ def monitor_positions(symbol, max_loss=STOP_LOSS_EUR):
         ticket = p.ticket
         profit = p.profit + p.swap + getattr(p, 'commission', 0.0)
         
-        # Strict Stop Loss Check: terminate immediately at 5 EUR loss
-        if profit <= max_loss:
-            logger.info(f"🛑 Stop Loss Hit for #{ticket}! Floating PnL: {profit:.2f} <= {max_loss:.2f} (5 EUR loss limit). Terminating position immediately...")
-            close_position_by_ticket(symbol, ticket)
-        elif profit > 0:
-            logger.info(f"📈 #{ticket} Running in Profit: +{profit:.2f} (allowing trade to run upwards)")
+        # Take Profit Target ($90)
+        if profit >= target_profit:
+            logger.info(f"🎯 Target Profit Hit for #{ticket}! Floating Profit: ${profit:.2f} >= ${target_profit:.2f}. Closing trade...")
+            if close_position_by_ticket(symbol, ticket):
+                last_close_time = time.time()
+        # Stop Loss Limit (-$30)
+        elif profit <= max_loss:
+            logger.info(f"🛑 Stop Loss Hit for #{ticket}! Floating PnL: ${profit:.2f} <= ${max_loss:.2f}. Closing trade...")
+            if close_position_by_ticket(symbol, ticket):
+                last_close_time = time.time()
 
     remaining_positions = mt5.positions_get(symbol=symbol)
     return len([p for p in (remaining_positions or []) if p.magic == config.MAGIC_NUMBER]) > 0
 
 def run_bot():
     """Main loop for the $6K Funded Account XAUUSD Scalping Bot"""
+    global last_close_time
     
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
         return
 
-    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Pure Stochastic Bot on {TIMEFRAME} | Volume: {LOT_SIZE} | Strict Stop Loss: 5 EUR | Profit Runner (No TP cap)")
+    logger.info(f"MT5 initialized. Started $6K {SYMBOL} Trend-Filtered Stochastic Bot on {TIMEFRAME} | Volume: {LOT_SIZE} | SL: ${abs(STOP_LOSS_USD)} / TP: ${TARGET_PROFIT_USD} (1:3 RR)")
     
     rules_checker = FundedAccountRules6k()
     
@@ -174,21 +194,29 @@ def run_bot():
                 
             # 2. 3 Consecutive Losses Rule
             if check_3_consecutive_losses():
-                logger.warning("🚫 3 Consecutive Losses hit today. Trading will continue as requested.")
+                logger.warning("🚫 3 Consecutive Losses hit today. Trading paused until new setup.")
+                time.sleep(60)
+                continue
                 
-            # 3. Handle Open Positions & Monitor for -5 EUR Stop Loss / Running Profit
+            # 3. Handle Open Positions & Monitor for TP/SL Targets
             if monitor_positions(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 4. Check Signals for New Positions (Pure Stochastic)
+            # 4. Check Cooldown
+            time_since_last_close = time.time() - last_close_time
+            if time_since_last_close < COOLDOWN_SECONDS:
+                time.sleep(SLEEP_INTERVAL)
+                continue
+
+            # 5. Check Signals for New Positions (Trend-Filtered Stochastic Pullback)
             signal, curr_k = check_scalping_signal(SYMBOL, TIMEFRAME)
             
             if signal == 'BUY':
-                logger.info(f"🟢 STOCH BUY SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (Stop Loss: 5 EUR, Profit Runner)...")
+                logger.info(f"🟢 TREND PULLBACK BUY SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (SL: ${abs(STOP_LOSS_USD)} / TP: ${TARGET_PROFIT_USD} [1:3 RR])...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_BUY)
             elif signal == 'SELL':
-                logger.info(f"🔴 STOCH SELL SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (Stop Loss: 5 EUR, Profit Runner)...")
+                logger.info(f"🔴 TREND PULLBACK SELL SIGNAL for {SYMBOL}! Executing {LOT_SIZE} Lots (SL: ${abs(STOP_LOSS_USD)} / TP: ${TARGET_PROFIT_USD} [1:3 RR])...")
                 place_scalping_order(SYMBOL, mt5.ORDER_TYPE_SELL)
                 
             time.sleep(SLEEP_INTERVAL)
