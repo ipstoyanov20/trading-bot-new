@@ -5,8 +5,6 @@ from datetime import datetime
 import pandas as pd
 
 import config
-from funded_rules_6k import FundedAccountRules6k
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -44,28 +42,6 @@ grid_state = {
     "anchor_price": 0.0,            # Reference price for grid levels & trailing
     "opened_levels": set(),         # Set of level numbers currently placed (e.g. {1, 2})
 }
-
-def check_3_consecutive_losses():
-    """Checks if the last 3 closed trades for today were losses."""
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    history_deals = mt5.history_deals_get(today, datetime.now())
-    if not history_deals:
-        return False
-    
-    # Filter for OUT deals (closed trades) that belong to this bot
-    closed_deals = [d for d in history_deals if d.entry == mt5.DEAL_ENTRY_OUT and d.magic == MAGIC_NUMBER]
-    
-    if len(closed_deals) >= 3:
-        # Check last 3 deals
-        last_3 = sorted(closed_deals, key=lambda x: x.time, reverse=True)[:3]
-        losses = 0
-        for d in last_3:
-            pnl = d.profit + d.commission + d.swap
-            if pnl < 0:
-                losses += 1
-        if losses >= 3:
-            return True
-    return False
 
 def get_filling_type(symbol):
     """
@@ -482,41 +458,21 @@ def run_bot():
     logger.info(f"Move Grid: {'ON' if MOVE_GRID else 'OFF'} | Magic: {MAGIC_NUMBER}")
     logger.info("=" * 60)
     
-    rules_checker = FundedAccountRules6k()
-    
     try:
         while True:
-            # 1. Challenge & Risk Rules Check
-            status = rules_checker.check_all_rules()
-            if not status["can_trade"]:
-                logger.warning("Rules Engine indicates limits reached! Pausing trading.")
-                time.sleep(60)
-                continue
-                
-            if status["profit_target_reached"]:
-                logger.info("Profit Target Reached! Bot will stand down.")
-                time.sleep(3600)
-                continue
-                
-            # 2. 3 Consecutive Losses Rule
-            if check_3_consecutive_losses():
-                logger.warning("🚫 3 Consecutive Losses hit today. Trading paused.")
-                time.sleep(60)
-                continue
-                
-            # 3. Manage Open Hedged Grid (if any)
+            # 1. Manage Open Hedged Grid (if any)
             has_active_grid = manage_hedged_grid(SYMBOL)
             if has_active_grid:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 4. Check Cooldown after Grid Close
+            # 2. Check Cooldown after Grid Close
             time_since_last_close = time.time() - last_close_time
             if time_since_last_close < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 5. Check Bollinger Bands Entry Signal on Candle Shift 1
+            # 3. Check Bollinger Bands Entry Signal on Candle Shift 1
             signal, candle_time = check_bb_entry_signal(SYMBOL, TIMEFRAME)
             
             if signal and (last_processed_candle_time != candle_time):
