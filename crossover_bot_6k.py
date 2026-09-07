@@ -24,12 +24,13 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Hedged Grid Parameters ---
+# --- Hedged Grid / Recovery Zone Parameters ---
 GRID_SIZE = 4                       # Max grid levels = 4
 SPACING_POINTS = 500                # Spacing = 500 points ($5.00 on 2-digit XAUUSD)
-ORDER_VOLUME = 0.5                  # Order volume = 0.5 lots per level
-TP_MULTIPLIER = 1.0                 # Take Profit = 1.0x spacing (500 points)
-GRID_SL_MULTIPLIER = 1.0            # Grid Stop Loss = 1.0x spacing (500 points)
+ORDER_VOLUME = 0.5                  # Initial Level 1 volume = 0.5 lots
+RECOVERY_ZONE_LOTS = [0.5, 1.0, 1.5, 2.0]  # Recovery Zone progression: increased volume for hedge levels
+TP_MULTIPLIER = 1.0                 # Basket Take Profit multiplier (1.0x spacing = +$250)
+GRID_SL_USD = 500.0                 # Grid Stop Loss = -$500.00 (closes all positions if net loss reaches -$500)
 MOVE_GRID = True                    # Move Grid = ON (Trailing Grid)
 
 # --- Bot Runtime State ---
@@ -318,19 +319,26 @@ def sync_grid_state(symbol):
         
     return positions
 
+def get_level_volume(level):
+    """Returns the order volume for a given grid level using Recovery Zone progression."""
+    idx = max(0, min(level - 1, len(RECOVERY_ZONE_LOTS) - 1))
+    return RECOVERY_ZONE_LOTS[idx]
+
 def place_grid_level(symbol, direction, level):
     """
-    Places an order for a specific grid level (Level 1 initial or Level 2-4 hedge).
+    Places an order for a specific grid level (Level 1 initial or Level 2-4 Recovery Zone hedge).
+    In a hedged grid, orders are managed as a unified basket without hard individual TPs,
+    preventing the broker from closing one side and leaving the opposite hedge orphaned.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     comment = f"BB_Grid_L{level}_{direction}"
-    tp_pts = int(SPACING_POINTS * TP_MULTIPLIER)
+    volume = get_level_volume(level)
     
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
-        volume=ORDER_VOLUME,
-        tp_points=tp_pts,
+        volume=volume,
+        tp_points=0,
         sl_points=0,
         comment=comment
     )
@@ -341,9 +349,9 @@ def place_grid_level(symbol, direction, level):
         if level == 1:
             grid_state["initial_direction"] = direction
             grid_state["anchor_price"] = fill_price
-            logger.info(f"🎯 Hedged Grid Started: Level 1 {direction} at {fill_price:.2f} (Anchor set to {fill_price:.2f})")
+            logger.info(f"🎯 Recovery Zone Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor set to {fill_price:.2f})")
         else:
-            logger.info(f"🛡️ Hedged Grid Level {level} {direction} added at {fill_price:.2f}")
+            logger.info(f"🛡️ Recovery Zone Level {level} {direction} added at {fill_price:.2f} | Vol: {volume}")
         return res, fill_price
     return None, 0.0
 
@@ -373,35 +381,41 @@ def manage_hedged_grid(symbol):
     initial_dir = grid_state["initial_direction"]
     current_count = len(positions)
     
-    # Calculate basket total floating PnL
+    # Calculate basket total floating PnL across all open positions
     total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
     
-    # 1. Basket Take Profit Check (1.0x spacing profit target)
-    # Uses official MT5 profit calculator for 100% precision across all broker contract sizes
+    # Calculate Basket Take Profit target (1.0x spacing = $250 on initial volume)
     calc_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, ORDER_VOLUME, anchor, anchor + spacing_dist)
     if calc_profit is not None and calc_profit > 0:
         basket_tp_usd = abs(calc_profit) * TP_MULTIPLIER
     else:
-        # Fallback using contract size: spacing_dist * contract_size * ORDER_VOLUME
         contract_size = getattr(symbol_info, 'trade_contract_size', 100.0)
         basket_tp_usd = spacing_dist * contract_size * ORDER_VOLUME * TP_MULTIPLIER
     
+    # 1. Basket Take Profit Check: Close ALL open positions together when target is reached
     if total_pnl >= basket_tp_usd:
         close_all_grid_positions(symbol, f"🎯 Basket TP Reached: ${total_pnl:.2f} >= ${basket_tp_usd:.2f}")
         return False
         
-    # 2. Grid Stop Loss Check (1.0x spacing beyond max grid size)
-    # If price extends 1.0x spacing beyond the last level (Level 4):
+    # 2. Grid Stop Loss Check: Close ALL open positions if drawdown reaches -$500.00
     grid_sl_hit = False
-    if initial_dir == "BUY":
-        if tick.bid <= anchor - (GRID_SIZE * spacing_dist):
+    sl_reason = ""
+    
+    if total_pnl <= -GRID_SL_USD:
+        grid_sl_hit = True
+        sl_reason = f"🛑 Grid Stop Loss Hit (Total PnL ${total_pnl:.2f} <= -${GRID_SL_USD:.2f})"
+        
+    # Also check if price breached beyond maximum grid boundary (Level 4 + 1 spacing)
+    if not grid_sl_hit:
+        if initial_dir == "BUY" and tick.bid <= anchor - (GRID_SIZE * spacing_dist):
             grid_sl_hit = True
-    elif initial_dir == "SELL":
-        if tick.ask >= anchor + (GRID_SIZE * spacing_dist):
+            sl_reason = f"🛑 Grid Stop Loss Hit (Price {tick.bid:.2f} crossed beyond Level {GRID_SIZE})"
+        elif initial_dir == "SELL" and tick.ask >= anchor + (GRID_SIZE * spacing_dist):
             grid_sl_hit = True
+            sl_reason = f"🛑 Grid Stop Loss Hit (Price {tick.ask:.2f} crossed beyond Level {GRID_SIZE})"
             
     if grid_sl_hit:
-        close_all_grid_positions(symbol, f"🛑 Grid Stop Loss Hit (Price crossed 1.0x spacing beyond Level {GRID_SIZE})")
+        close_all_grid_positions(symbol, sl_reason)
         return False
         
     # 3. Move Grid = ON (Trailing Grid)
@@ -465,11 +479,11 @@ def run_bot():
         return
         
     logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Hedged Grid Bot")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Recovery Zone Hedged Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"Grid Size: {GRID_SIZE} | Spacing: {SPACING_POINTS} pts | Volume: {ORDER_VOLUME} lots")
-    logger.info(f"Take Profit: {TP_MULTIPLIER}x Spacing | Grid Stop Loss: {GRID_SL_MULTIPLIER}x Spacing")
+    logger.info(f"Grid Size: {GRID_SIZE} | Spacing: {SPACING_POINTS} pts | Volume Progression: {RECOVERY_ZONE_LOTS}")
+    logger.info(f"Take Profit: +{TP_MULTIPLIER}x Spacing (+$250) | Grid Stop Loss: -${GRID_SL_USD:.2f}")
     logger.info(f"Move Grid: {'ON' if MOVE_GRID else 'OFF'} | Magic: {MAGIC_NUMBER}")
     logger.info("=" * 60)
     
