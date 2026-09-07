@@ -24,14 +24,14 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Hedged Grid / Recovery Zone Parameters ---
-GRID_SIZE = 4                       # Max grid levels = 4
-SPACING_POINTS = 500                # Spacing = 500 points ($5.00 on 2-digit XAUUSD)
-ORDER_VOLUME = 0.5                  # Initial Level 1 volume = 0.5 lots
-RECOVERY_ZONE_LOTS = [0.5, 1.0, 1.5, 2.0]  # Recovery Zone progression: increased volume for hedge levels
-TP_MULTIPLIER = 1.0                 # Basket Take Profit multiplier (1.0x spacing = +$250)
-GRID_SL_USD = 500.0                 # Grid Stop Loss = -$500.00 (closes all positions if net loss reaches -$500)
-MOVE_GRID = True                    # Move Grid = ON (Trailing Grid)
+# --- Recovery Zone Hedging Parameters ---
+FIRST_TRADE_VOLUME = 0.5            # First trade volume = 0.5 lots
+HEDGE_VOLUME = 1.0                  # Second recovery hedge volume = 1.0 lot
+
+HEDGE_TRIGGER_POINTS = 100          # Open 2nd recovery hedge at 100 pips ($1.00) adverse movement from first trade
+HEDGE_EXIT_POINTS = 500             # Close hedged trade when price hits 500 pips ($5.00) from first trade
+FIRST_TRADE_TP_POINTS = 500         # First trade Take Profit at 500 pips ($5.00) in its favor
+# NOTE: Grid Stop Loss is REMOVED entirely as requested.
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed grid basket
@@ -319,20 +319,13 @@ def sync_grid_state(symbol):
         
     return positions
 
-def get_level_volume(level):
-    """Returns the order volume for a given grid level using Recovery Zone progression."""
-    idx = max(0, min(level - 1, len(RECOVERY_ZONE_LOTS) - 1))
-    return RECOVERY_ZONE_LOTS[idx]
-
 def place_grid_level(symbol, direction, level):
     """
-    Places an order for a specific grid level (Level 1 initial or Level 2-4 Recovery Zone hedge).
-    In a hedged grid, orders are managed as a unified basket without hard individual TPs,
-    preventing the broker from closing one side and leaving the opposite hedge orphaned.
+    Places an order for Level 1 (first trade, 0.5 lots) or Level 2 (recovery hedge, 1.0 lot).
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     comment = f"BB_Grid_L{level}_{direction}"
-    volume = get_level_volume(level)
+    volume = FIRST_TRADE_VOLUME if level == 1 else HEDGE_VOLUME
     
     res, fill_price = place_order_safe(
         symbol=symbol,
@@ -349,19 +342,21 @@ def place_grid_level(symbol, direction, level):
         if level == 1:
             grid_state["initial_direction"] = direction
             grid_state["anchor_price"] = fill_price
-            logger.info(f"🎯 Recovery Zone Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor set to {fill_price:.2f})")
+            logger.info(f"🎯 First Trade Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor: {fill_price:.2f})")
         else:
-            logger.info(f"🛡️ Recovery Zone Level {level} {direction} added at {fill_price:.2f} | Vol: {volume}")
+            logger.info(f"🛡️ 2nd Recovery Hedge Placed: Level 2 {direction} at {fill_price:.2f} | Vol: {volume}")
         return res, fill_price
     return None, 0.0
 
 def manage_hedged_grid(symbol):
     """
-    Manages active hedged grid positions:
-    - Move Grid (Trailing Grid) when price advances favorably by spacing.
-    - Triggers hedged levels 2-4 when price moves adversely by spacing intervals.
-    - Checks Basket Take Profit and Grid Stop Loss.
-    Returns True if grid positions are currently active, False otherwise.
+    Manages active trades:
+    1. Triggers 2nd recovery hedge (1.0 lot) when price moves 100 pips against first trade.
+    2. Closes the hedged trade when price hits 500 pips from the first trade.
+    3. Closes first trade when price hits 500 pips in its favor (Take Profit).
+    4. Closes all trades together if combined basket net profit >= +$250.
+    5. Grid Stop Loss is REMOVED entirely (no loss exits).
+    Returns True if positions remain open, False otherwise.
     """
     positions = sync_grid_state(symbol)
     if not positions:
@@ -376,93 +371,90 @@ def manage_hedged_grid(symbol):
         return True
         
     point = getattr(symbol_info, 'point', 0.01)
-    spacing_dist = SPACING_POINTS * point
     anchor = grid_state["anchor_price"]
     initial_dir = grid_state["initial_direction"]
-    current_count = len(positions)
     
-    # Calculate basket total floating PnL across all open positions
-    total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
-    
-    # Calculate Basket Take Profit target (1.0x spacing = $250 on initial volume)
-    calc_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, ORDER_VOLUME, anchor, anchor + spacing_dist)
-    if calc_profit is not None and calc_profit > 0:
-        basket_tp_usd = abs(calc_profit) * TP_MULTIPLIER
-    else:
-        contract_size = getattr(symbol_info, 'trade_contract_size', 100.0)
-        basket_tp_usd = spacing_dist * contract_size * ORDER_VOLUME * TP_MULTIPLIER
-    
-    # 1. Basket Take Profit Check: Close ALL open positions together when target is reached
-    if total_pnl >= basket_tp_usd:
-        close_all_grid_positions(symbol, f"🎯 Basket TP Reached: ${total_pnl:.2f} >= ${basket_tp_usd:.2f}")
-        return False
-        
-    # 2. Grid Stop Loss Check: Close ALL open positions if drawdown reaches -$500.00
-    grid_sl_hit = False
-    sl_reason = ""
-    
-    if total_pnl <= -GRID_SL_USD:
-        grid_sl_hit = True
-        sl_reason = f"🛑 Grid Stop Loss Hit (Total PnL ${total_pnl:.2f} <= -${GRID_SL_USD:.2f})"
-        
-    # Also check if price breached beyond maximum grid boundary (Level 4 + 1 spacing)
-    if not grid_sl_hit:
-        if initial_dir == "BUY" and tick.bid <= anchor - (GRID_SIZE * spacing_dist):
-            grid_sl_hit = True
-            sl_reason = f"🛑 Grid Stop Loss Hit (Price {tick.bid:.2f} crossed beyond Level {GRID_SIZE})"
-        elif initial_dir == "SELL" and tick.ask >= anchor + (GRID_SIZE * spacing_dist):
-            grid_sl_hit = True
-            sl_reason = f"🛑 Grid Stop Loss Hit (Price {tick.ask:.2f} crossed beyond Level {GRID_SIZE})"
+    # Identify Level 1 (first trade) and Level 2 (hedge trade)
+    pos_l1 = None
+    pos_l2 = None
+    for p in positions:
+        if p.comment and "BB_Grid_L2" in p.comment:
+            pos_l2 = p
+        elif p.comment and "BB_Grid_L1" in p.comment:
+            pos_l1 = p
             
-    if grid_sl_hit:
-        close_all_grid_positions(symbol, sl_reason)
+    # Chronological fallback
+    if pos_l1 is None and len(positions) > 0:
+        pos_l1 = positions[0]
+    if pos_l2 is None and len(positions) > 1:
+        pos_l2 = positions[1]
+
+    total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
+
+    # 1. Combined Basket Take Profit Check: If both trades are open and net profit >= +$250
+    if len(positions) > 1 and total_pnl >= 250.0:
+        close_all_grid_positions(symbol, f"🎯 Combined Basket TP Reached: +${total_pnl:.2f} >= +$250.00")
         return False
-        
-    # 3. Move Grid = ON (Trailing Grid)
-    # When price advances in favor of the primary direction by >= 1 spacing from anchor:
-    if MOVE_GRID and current_count == 1:
-        if initial_dir == "BUY" and tick.bid >= anchor + spacing_dist:
-            steps = int((tick.bid - anchor) // spacing_dist)
-            grid_state["anchor_price"] += steps * spacing_dist
-            logger.info(f"🔄 Move Grid: Trailed anchor from {anchor:.2f} to {grid_state['anchor_price']:.2f} (Bid: {tick.bid:.2f})")
-            anchor = grid_state["anchor_price"]
-        elif initial_dir == "SELL" and tick.ask <= anchor - spacing_dist:
-            steps = int((anchor - tick.ask) // spacing_dist)
-            grid_state["anchor_price"] -= steps * spacing_dist
-            logger.info(f"🔄 Move Grid: Trailed anchor from {anchor:.2f} to {grid_state['anchor_price']:.2f} (Ask: {tick.ask:.2f})")
-            anchor = grid_state["anchor_price"]
 
-    # 4. Hedged Grid Level Triggers (Levels 2, 3, 4)
-    # In a hedged grid, adverse movement triggers alternating hedge positions:
-    # BUY initial -> Level 2: SELL (at -1 spacing), Level 3: BUY (at -2 spacing), Level 4: SELL (at -3 spacing)
-    # SELL initial -> Level 2: BUY (at +1 spacing), Level 3: SELL (at +2 spacing), Level 4: BUY (at +3 spacing)
-    if current_count < GRID_SIZE:
+    # 2. First Trade (Level 1) Take Profit at 500 pips in its favor (when hedge is not open)
+    if pos_l1 is not None and pos_l2 is None:
+        l1_tp_dist = FIRST_TRADE_TP_POINTS * point
+        l1_tp_hit = False
+        if initial_dir == "BUY" and tick.bid >= anchor + l1_tp_dist:
+            l1_tp_hit = True
+        elif initial_dir == "SELL" and tick.ask <= anchor - l1_tp_dist:
+            l1_tp_hit = True
+            
+        if l1_tp_hit:
+            close_grid_position(symbol, pos_l1)
+            logger.info(f"🎯 First Trade ({initial_dir}) Take Profit hit at 500 pips from anchor {anchor:.2f}!")
+            sync_grid_state(symbol)
+            return len(get_active_grid_positions(symbol)) > 0
+
+    # 3. Trigger 2nd Recovery Hedge (Level 2, 1.0 lot) at 100 pips against first trade
+    if pos_l2 is None and (2 not in grid_state["opened_levels"]):
+        hedge_trigger_dist = HEDGE_TRIGGER_POINTS * point
         if initial_dir == "BUY":
-            price = tick.bid
-            for lvl in range(2, GRID_SIZE + 1):
-                level_spacing_multiplier = lvl - 1
-                trigger_price = anchor - (level_spacing_multiplier * spacing_dist)
-                
-                if lvl not in grid_state["opened_levels"] and price <= trigger_price:
-                    # Alternate: Level 2 = SELL, Level 3 = BUY, Level 4 = SELL
-                    next_direction = "SELL" if lvl % 2 == 0 else "BUY"
-                    logger.info(f"Triggering Hedged Level {lvl} ({next_direction}): Price {price:.2f} <= {trigger_price:.2f}")
-                    place_grid_level(symbol, next_direction, lvl)
-                    break
-                    
+            # If price drops 100 pips below first trade anchor
+            if tick.bid <= anchor - hedge_trigger_dist:
+                logger.info(f"🛡️ Triggering 2nd Recovery Hedge (SELL {HEDGE_VOLUME} lots): Price {tick.bid:.2f} <= {anchor - hedge_trigger_dist:.2f} (100 pips below {anchor:.2f})")
+                place_grid_level(symbol, "SELL", level=2)
         elif initial_dir == "SELL":
-            price = tick.ask
-            for lvl in range(2, GRID_SIZE + 1):
-                level_spacing_multiplier = lvl - 1
-                trigger_price = anchor + (level_spacing_multiplier * spacing_dist)
-                
-                if lvl not in grid_state["opened_levels"] and price >= trigger_price:
-                    # Alternate: Level 2 = BUY, Level 3 = SELL, Level 4 = BUY
-                    next_direction = "BUY" if lvl % 2 == 0 else "SELL"
-                    logger.info(f"Triggering Hedged Level {lvl} ({next_direction}): Price {price:.2f} >= {trigger_price:.2f}")
-                    place_grid_level(symbol, next_direction, lvl)
-                    break
+            # If price rises 100 pips above first trade anchor
+            if tick.ask >= anchor + hedge_trigger_dist:
+                logger.info(f"🛡️ Triggering 2nd Recovery Hedge (BUY {HEDGE_VOLUME} lots): Price {tick.ask:.2f} >= {anchor + hedge_trigger_dist:.2f} (100 pips above {anchor:.2f})")
+                place_grid_level(symbol, "BUY", level=2)
 
+    # 4. Close the Hedged Trade when price reaches 500 pips from the first trade
+    if pos_l2 is None:
+        # Check if it was just opened
+        positions_now = get_active_grid_positions(symbol)
+        for p in positions_now:
+            if p.comment and "BB_Grid_L2" in p.comment or (p.ticket != getattr(pos_l1, 'ticket', None)):
+                pos_l2 = p
+                
+    if pos_l2 is not None:
+        hedge_exit_dist = HEDGE_EXIT_POINTS * point
+        hedge_exit_hit = False
+        
+        if initial_dir == "BUY":
+            # First trade was BUY at anchor; hedge is SELL.
+            # Close hedge when price drops to 500 pips below first trade anchor
+            if tick.bid <= anchor - hedge_exit_dist:
+                hedge_exit_hit = True
+        elif initial_dir == "SELL":
+            # First trade was SELL at anchor; hedge is BUY.
+            # Close hedge when price rises to 500 pips above first trade anchor
+            if tick.ask >= anchor + hedge_exit_dist:
+                hedge_exit_hit = True
+                
+        if hedge_exit_hit:
+            close_grid_position(symbol, pos_l2)
+            grid_state["opened_levels"].discard(2)
+            logger.info(f"🎯 Hedged Trade closed at 500 pips from first trade (Anchor: {anchor:.2f})! Profit secured.")
+            sync_grid_state(symbol)
+
+    # NOTE: Grid Stop Loss is REMOVED ENTIRELY — no stop loss exits.
     return len(get_active_grid_positions(symbol)) > 0
 
 def run_bot():
@@ -479,12 +471,13 @@ def run_bot():
         return
         
     logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Recovery Zone Hedged Bot")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} 100/500 Recovery Hedge Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"Grid Size: {GRID_SIZE} | Spacing: {SPACING_POINTS} pts | Volume Progression: {RECOVERY_ZONE_LOTS}")
-    logger.info(f"Take Profit: +{TP_MULTIPLIER}x Spacing (+$250) | Grid Stop Loss: -${GRID_SL_USD:.2f}")
-    logger.info(f"Move Grid: {'ON' if MOVE_GRID else 'OFF'} | Magic: {MAGIC_NUMBER}")
+    logger.info(f"First Trade Volume: {FIRST_TRADE_VOLUME} lots | TP: {FIRST_TRADE_TP_POINTS} pts")
+    logger.info(f"2nd Recovery Hedge: {HEDGE_VOLUME} lots at {HEDGE_TRIGGER_POINTS} pts against first trade")
+    logger.info(f"Hedge Exit: Closes at {HEDGE_EXIT_POINTS} pts from first trade")
+    logger.info(f"Grid Stop Loss: REMOVED (No SL)")
     logger.info("=" * 60)
     
     try:
