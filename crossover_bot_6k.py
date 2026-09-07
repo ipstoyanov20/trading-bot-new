@@ -35,6 +35,8 @@ MOVE_GRID = True                    # Move Grid = ON (Trailing Grid)
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed grid basket
 last_processed_candle_time = None   # Timestamp of last processed candle shift 1
+last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
+last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 
 grid_state = {
     "active": False,
@@ -122,6 +124,16 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
             f"Close: {c_close:.2f} <= Upper (Mid: {c_middle:.2f}, Lower: {c_lower:.2f})"
         )
         return 'SELL', candle_time
+        
+    global last_no_signal_log_time, last_logged_no_signal_candle
+    now = time.time()
+    if (candle_time != last_logged_no_signal_candle) or (now - last_no_signal_log_time >= 15):
+        last_no_signal_log_time = now
+        last_logged_no_signal_candle = candle_time
+        logger.info(
+            f"⏳ Waiting for a signal (Bollinger Bands M5) | Shift 1 [{candle_time}] "
+            f"Open: {c_open:.2f}, Close: {c_close:.2f} | Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f}"
+        )
         
     return None, candle_time
 
@@ -365,11 +377,14 @@ def manage_hedged_grid(symbol):
     total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
     
     # 1. Basket Take Profit Check (1.0x spacing profit target)
-    # 1.0x spacing on ORDER_VOLUME: spacing_dist * tick_value / tick_size * ORDER_VOLUME
-    tick_value = getattr(symbol_info, 'trade_tick_value', 1.0)
-    tick_size = getattr(symbol_info, 'trade_tick_size', point)
-    dollar_per_point_unit = (tick_value / tick_size) * point
-    basket_tp_usd = SPACING_POINTS * TP_MULTIPLIER * dollar_per_point_unit * ORDER_VOLUME
+    # Uses official MT5 profit calculator for 100% precision across all broker contract sizes
+    calc_profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, ORDER_VOLUME, anchor, anchor + spacing_dist)
+    if calc_profit is not None and calc_profit > 0:
+        basket_tp_usd = abs(calc_profit) * TP_MULTIPLIER
+    else:
+        # Fallback using contract size: spacing_dist * contract_size * ORDER_VOLUME
+        contract_size = getattr(symbol_info, 'trade_contract_size', 100.0)
+        basket_tp_usd = spacing_dist * contract_size * ORDER_VOLUME * TP_MULTIPLIER
     
     if total_pnl >= basket_tp_usd:
         close_all_grid_positions(symbol, f"🎯 Basket TP Reached: ${total_pnl:.2f} >= ${basket_tp_usd:.2f}")
