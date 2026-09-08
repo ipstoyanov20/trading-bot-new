@@ -24,9 +24,11 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade Parameters ---
+# --- Trade & Trailing Profit Parameters ---
 TRADE_VOLUME = 0.5                  # Volume for each trade = 0.5 lots
-TARGET_PROFIT_USD = 45.0            # Target profit in USD (wait for +$45 profit to close)
+TRAIL_ACTIVATION_USD = 45.0         # Minimum profit in USD to activate trailing lock
+TRAIL_PULLBACK_USD = 5.0            # Pullback/drop in USD from peak profit to trigger exit
+MIN_LOCKED_PROFIT_USD = 40.0        # Minimum guaranteed locked profit floor when trailing triggers
 # NOTE: Stop Loss is completely removed/disabled as requested.
 # NOTE: Recovery zone hedging and all hedging are removed. Strictly 1 trade at a time.
 
@@ -36,6 +38,7 @@ last_processed_candle_time = None   # Timestamp of last processed candle shift 1
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
+trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
 
 def get_filling_type(symbol):
     """
@@ -257,7 +260,7 @@ def open_single_trade(symbol, direction):
     Opens a single trade (TRADE_VOLUME lots) with NO stop loss.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_Target45"
+    comment = f"BB_{direction}_Trailing"
     
     res, fill_price = place_order_safe(
         symbol=symbol,
@@ -269,50 +272,80 @@ def open_single_trade(symbol, direction):
     )
     
     if res:
-        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Target Profit: +${TARGET_PROFIT_USD:.2f} | Stop Loss: NONE")
+        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Trailing Activation: +${TRAIL_ACTIVATION_USD:.2f} (Pullback: ${TRAIL_PULLBACK_USD:.2f}) | Stop Loss: NONE")
         return res, fill_price
     return None, 0.0
 
 def manage_active_trade(symbol):
     """
-    Manages the single active trade:
+    Manages the single active trade with Trailing Profit Lock:
     - Strictly only 1 trade runs at a time.
     - Monitors real-time net profit (profit + swap + commission).
-    - When net profit >= TARGET_PROFIT_USD ($45.00), closes the trade.
-    - NO stop loss is applied (does not exit on drawdown).
+    - If profit goes UP, trade stays OPEN (letting profit run).
+    - Tracks peak profit achieved.
+    - Once profit reaches at least TRAIL_ACTIVATION_USD ($45.00), trailing is ARMED.
+    - If price makes a drastic reversal down (drop_from_peak >= TRAIL_PULLBACK_USD ($5.00))
+      and profit >= MIN_LOCKED_PROFIT_USD ($40.00), it closes the trade immediately.
+    - NO stop loss is applied (does not exit on regular drawdowns).
     Returns True if a trade is currently open, False if flat.
     """
-    global last_close_time, last_status_log_time
+    global last_close_time, last_status_log_time, trade_peak_profit
     
     positions = get_active_positions(symbol)
     if not positions:
+        trade_peak_profit.clear()
         return False
         
     position = positions[0]
+    ticket = position.ticket
     total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
     
-    # 1. Take Profit Check: if net profit reaches or exceeds $45.00
-    if total_pnl >= TARGET_PROFIT_USD:
-        logger.info(f"🎯 Target Profit Reached: +${total_pnl:.2f} >= +${TARGET_PROFIT_USD:.2f}! Closing position #{position.ticket}...")
-        if close_position(symbol, position):
-            last_close_time = time.time()
-            logger.info(f"💰 Position #{position.ticket} closed successfully with +${total_pnl:.2f} profit!")
-            return False
-            
+    # Track and update peak profit
+    if ticket not in trade_peak_profit:
+        trade_peak_profit[ticket] = total_pnl
+    else:
+        if total_pnl > trade_peak_profit[ticket]:
+            old_peak = trade_peak_profit[ticket]
+            trade_peak_profit[ticket] = total_pnl
+            # Log new high peak if significant or above activation
+            if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
+                logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f} (Trailing Active, letting profit run)")
+
+    peak = trade_peak_profit[ticket]
+    
+    # Trailing Profit Exit Condition:
+    # 1. Peak reached at least the activation threshold ($45.00)
+    # 2. Reversal / drastic drop from peak >= $5.00
+    # 3. Current net profit >= minimum locked profit floor ($40.00)
+    if peak >= TRAIL_ACTIVATION_USD:
+        drop_from_peak = peak - total_pnl
+        if drop_from_peak >= TRAIL_PULLBACK_USD and total_pnl >= MIN_LOCKED_PROFIT_USD:
+            logger.info(
+                f"💰 Trailing Profit Lock Triggered for #{ticket}! "
+                f"Peak: +${peak:.2f} | Current: +${total_pnl:.2f} | Drop from Peak: -${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f}. "
+                f"Closing position to secure profit..."
+            )
+            if close_position(symbol, position):
+                last_close_time = time.time()
+                trade_peak_profit.pop(ticket, None)
+                logger.info(f"✅ Position #{ticket} closed successfully with +${total_pnl:.2f} profit locked in!")
+                return False
+
     # Periodic status log (every 10 seconds)
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+        status_trailing = "ARMED" if peak >= TRAIL_ACTIVATION_USD else f"Waiting for +${TRAIL_ACTIVATION_USD:.2f}"
         logger.info(
-            f"📈 Active Trade #{position.ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f}) | "
-            f"Current P&L: ${total_pnl:.2f} / Target: +${TARGET_PROFIT_USD:.2f} | Stop Loss: Disabled"
+            f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f}) | "
+            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f} | Trailing: {status_trailing} | Stop Loss: Disabled"
         )
         
     return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot ($45 TP, No SL, No Hedging)."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot (Trailing Profit Lock, No SL, No Hedging)."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -329,7 +362,9 @@ def run_bot():
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
     logger.info(f"Trade Volume: {TRADE_VOLUME} lots (1 trade at a time)")
-    logger.info(f"Target Profit: +${TARGET_PROFIT_USD:.2f}")
+    logger.info(f"Trailing Activation: +${TRAIL_ACTIVATION_USD:.2f} (Let profits run)")
+    logger.info(f"Trailing Pullback Exit: -${TRAIL_PULLBACK_USD:.2f} from peak")
+    logger.info(f"Minimum Locked Floor: +${MIN_LOCKED_PROFIT_USD:.2f}")
     logger.info(f"Stop Loss: NONE (Disabled)")
     logger.info(f"Hedging: NONE (All hedging & recovery zones removed)")
     logger.info("=" * 60)
