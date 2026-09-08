@@ -26,7 +26,7 @@ AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Trade Parameters ---
 TRADE_VOLUME = 0.5                  # Volume for each trade = 0.5 lots
-TARGET_PROFIT_USD = 250.0           # Target profit in USD (wait for $250 profit to close)
+TARGET_PROFIT_USD = 45.0            # Target profit in USD (wait for +$45 profit to close)
 # NOTE: Stop Loss is completely removed/disabled as requested.
 # NOTE: Recovery zone hedging and all hedging are removed. Strictly 1 trade at a time.
 
@@ -257,7 +257,7 @@ def open_single_trade(symbol, direction):
     Opens a single trade (TRADE_VOLUME lots) with NO stop loss.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_Target250"
+    comment = f"BB_{direction}_Target45"
     
     res, fill_price = place_order_safe(
         symbol=symbol,
@@ -278,7 +278,7 @@ def manage_active_trade(symbol):
     Manages the single active trade:
     - Strictly only 1 trade runs at a time.
     - Monitors real-time net profit (profit + swap + commission).
-    - When net profit >= TARGET_PROFIT_USD ($250.00), closes the trade.
+    - When net profit >= TARGET_PROFIT_USD ($45.00), closes the trade.
     - NO stop loss is applied (does not exit on drawdown).
     Returns True if a trade is currently open, False if flat.
     """
@@ -291,7 +291,7 @@ def manage_active_trade(symbol):
     position = positions[0]
     total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
     
-    # 1. Take Profit Check: if net profit reaches or exceeds $250.00
+    # 1. Take Profit Check: if net profit reaches or exceeds $45.00
     if total_pnl >= TARGET_PROFIT_USD:
         logger.info(f"🎯 Target Profit Reached: +${total_pnl:.2f} >= +${TARGET_PROFIT_USD:.2f}! Closing position #{position.ticket}...")
         if close_position(symbol, position):
@@ -312,7 +312,7 @@ def manage_active_trade(symbol):
     return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot ($250 TP, No SL, No Hedging)."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot ($45 TP, No SL, No Hedging)."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
