@@ -24,12 +24,13 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade & Trailing Profit Parameters (Option A: 6K Funded Balanced Setup) ---
+# --- Trade & Trailing Profit Parameters ---
 TRADE_VOLUME = 0.15                  # Volume: 0.15 lots ($1 move in Gold = $15.00)
-SL_POINTS = 500                      # Hard Stop Loss: 500 points ($5.00 move = -$75.00 max risk)
-TRAIL_ACTIVATION_USD = 30.0          # Minimum profit in USD to activate trailing lock (+~$2.00 move)
-TRAIL_PULLBACK_USD = 5.0             # Pullback/drop in USD from peak profit to trigger exit
-MIN_LOCKED_PROFIT_USD = 25.0         # Minimum guaranteed locked profit floor when trailing triggers
+SL_POINTS = 670                      # Hard Stop Loss: 670 points ($6.70 move = ~$100.00 max risk)
+MAX_LOSS_USD = 100.0                 # Max allowed dollar loss floor (-$100.00)
+TRAIL_ACTIVATION_USD = 10.0          # Minimum profit in USD to activate trailing & BE floor (+~$0.67 move)
+TRAIL_PULLBACK_USD = 8.0             # Pullback/drop in USD from peak profit to trigger exit
+MIN_LOCKED_PROFIT_USD = 2.0          # Guaranteed locked profit floor once +$10 is reached (+~$0.13)
 # NOTE: Recovery zone hedging and all hedging are removed. Strictly 1 trade at a time.
 
 # --- Bot Runtime State ---
@@ -272,21 +273,19 @@ def open_single_trade(symbol, direction):
     )
     
     if res:
-        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Hard SL: {SL_POINTS} pts ($5.00 move / -$75.00 max risk) | Trailing Activation: +${TRAIL_ACTIVATION_USD:.2f} (Pullback: ${TRAIL_PULLBACK_USD:.2f})")
+        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | Target: BE at +${TRAIL_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor), Trailing drop: ${TRAIL_PULLBACK_USD:.2f}")
         return res, fill_price
     return None, 0.0
 
 def manage_active_trade(symbol):
     """
-    Manages the single active trade with Trailing Profit Lock and Hard Stop Loss:
+    Manages the single active trade with Trailing Profit Lock, Break-Even floor, and Hard Stop Loss:
     - Strictly only 1 trade runs at a time.
-    - Protected by hard stop loss placed with broker order.
+    - Hard Stop Loss limit at -$100.00 (broker order + bot check).
     - Monitors real-time net profit (profit + swap + commission).
-    - If profit goes UP, trade stays OPEN (letting profit run).
     - Tracks peak profit achieved.
-    - Once profit reaches at least TRAIL_ACTIVATION_USD ($30.00), trailing is ARMED.
-    - If price makes a pullback down (drop_from_peak >= TRAIL_PULLBACK_USD ($5.00))
-      and profit >= MIN_LOCKED_PROFIT_USD ($25.00), it closes the trade immediately.
+    - Break-Even / Floor Rule: Once peak touches +$10.00, trade is 100% guaranteed from loss (locks +$2.00 floor).
+    - Trailing Rule: If trade continues higher, closes on an $8.00 drop from peak profit.
     Returns True if a trade is currently open, False if flat.
     """
     global last_close_time, last_status_log_time, trade_peak_profit
@@ -310,23 +309,33 @@ def manage_active_trade(symbol):
         if total_pnl > trade_peak_profit[ticket]:
             old_peak = trade_peak_profit[ticket]
             trade_peak_profit[ticket] = total_pnl
-            # Log new high peak if significant or above activation
+            # Log new high peak if significant or crosses activation
             if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
                 logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f} (Trailing Active, letting profit run)")
 
     peak = trade_peak_profit[ticket]
     
-    # Trailing Profit Exit Condition:
-    # 1. Peak reached at least the activation threshold
-    # 2. Reversal / pullback drop from peak >= TRAIL_PULLBACK_USD
-    # 3. Current net profit >= minimum locked profit floor
+    # 1. Hard Downside Protection (-$100.00 max loss)
+    if total_pnl <= -MAX_LOSS_USD:
+        logger.info(
+            f"🛑 Hard Stop Loss Triggered for #{ticket}! "
+            f"Current P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing position to protect account..."
+        )
+        if close_position(symbol, position):
+            last_close_time = time.time()
+            trade_peak_profit.pop(ticket, None)
+            return False
+
+    # 2. Break-Even & Trailing Profit Lock Exit:
+    # Rule A: Once peak reaches +$10.00, it is 100% guaranteed from loss.
+    # Rule B: Closes if dropped by $8.00 from peak, OR if it pulls back down to the +$2.00 floor.
     if peak >= TRAIL_ACTIVATION_USD:
         drop_from_peak = peak - total_pnl
-        if drop_from_peak >= TRAIL_PULLBACK_USD and total_pnl >= MIN_LOCKED_PROFIT_USD:
+        if (drop_from_peak >= TRAIL_PULLBACK_USD and total_pnl >= MIN_LOCKED_PROFIT_USD) or (total_pnl <= MIN_LOCKED_PROFIT_USD):
+            exit_reason = f"Drop from Peak (-${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f})" if drop_from_peak >= TRAIL_PULLBACK_USD else "Securing Guaranteed +$2.00 Floor"
             logger.info(
-                f"💰 Trailing Profit Lock Triggered for #{ticket}! "
-                f"Peak: +${peak:.2f} | Current: +${total_pnl:.2f} | Drop from Peak: -${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f}. "
-                f"Closing position to secure profit..."
+                f"💰 Trailing Exit Triggered for #{ticket} ({exit_reason})! "
+                f"Peak: +${peak:.2f} | Current: +${total_pnl:.2f}. Closing position to secure profit..."
             )
             if close_position(symbol, position):
                 last_close_time = time.time()
@@ -339,7 +348,7 @@ def manage_active_trade(symbol):
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        status_trailing = "ARMED" if peak >= TRAIL_ACTIVATION_USD else f"Waiting for +${TRAIL_ACTIVATION_USD:.2f}"
+        status_trailing = f"ARMED (Floor: +${MIN_LOCKED_PROFIT_USD:.2f})" if peak >= TRAIL_ACTIVATION_USD else f"Waiting for +${TRAIL_ACTIVATION_USD:.2f}"
         sl_str = f"{position.sl:.2f}" if position.sl > 0 else "None"
         logger.info(
             f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | SL: {sl_str}) | "
@@ -349,7 +358,7 @@ def manage_active_trade(symbol):
     return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot (Option A: Balanced & Protected)."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -362,15 +371,13 @@ def run_bot():
         return
         
     logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single Trade Bot (Option A: Balanced)")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single Trade Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
     logger.info(f"Trade Volume: {TRADE_VOLUME} lots (1 trade at a time)")
-    logger.info(f"Hard Stop Loss: {SL_POINTS} points ($5.00 move | -$75.00 max risk per trade)")
-    logger.info(f"Risk Management: ~1.25% risk per trade (Well below firm 3.0% limit of $180)")
-    logger.info(f"Trailing Activation: +${TRAIL_ACTIVATION_USD:.2f} (Let profits run)")
-    logger.info(f"Trailing Pullback Exit: -${TRAIL_PULLBACK_USD:.2f} from peak")
-    logger.info(f"Minimum Locked Floor: +${MIN_LOCKED_PROFIT_USD:.2f}")
+    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$6.70 move)")
+    logger.info(f"Break-Even Protection: Locks +${MIN_LOCKED_PROFIT_USD:.2f} floor once +${TRAIL_ACTIVATION_USD:.2f} is reached")
+    logger.info(f"Trailing Pullback Exit: -${TRAIL_PULLBACK_USD:.2f} from peak profit")
     logger.info("=" * 60)
     
     try:
