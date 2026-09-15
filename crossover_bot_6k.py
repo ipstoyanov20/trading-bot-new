@@ -26,8 +26,8 @@ AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Trade & Trailing Profit Parameters ---
 TRADE_VOLUME = 0.15                  # Volume: 0.15 lots ($1 move in Gold = $15.00)
-SL_POINTS = 670                      # Hard Stop Loss: 670 points ($6.70 move = ~$100.00 max risk)
-MAX_LOSS_USD = 100.0                 # Max allowed dollar loss floor (-$100.00)
+SL_POINTS = 200                      # Hard Stop Loss: 200 points ($2.00 move = -$30.00 max risk)
+MAX_LOSS_USD = 30.0                  # Max allowed dollar loss floor (-$30.00)
 TRAIL_ACTIVATION_USD = 10.0          # Minimum profit in USD to activate trailing & BE floor (+~$0.67 move)
 TRAIL_PULLBACK_USD = 8.0             # Pullback/drop in USD from peak profit to trigger exit
 MIN_LOCKED_PROFIT_USD = 2.0          # Guaranteed locked profit floor once +$10 is reached (+~$0.13)
@@ -375,7 +375,7 @@ def run_bot():
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
     logger.info(f"Trade Volume: {TRADE_VOLUME} lots (1 trade at a time)")
-    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$6.70 move)")
+    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$2.00 move)")
     logger.info(f"Break-Even Protection: Locks +${MIN_LOCKED_PROFIT_USD:.2f} floor once +${TRAIL_ACTIVATION_USD:.2f} is reached")
     logger.info(f"Trailing Pullback Exit: -${TRAIL_PULLBACK_USD:.2f} from peak profit")
     logger.info("=" * 60)
