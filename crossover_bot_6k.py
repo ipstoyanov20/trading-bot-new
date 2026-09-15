@@ -28,9 +28,10 @@ AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 TRADE_VOLUME = 0.15                  # Volume: 0.15 lots ($1 move in Gold = $15.00)
 SL_POINTS = 200                      # Hard Stop Loss: 200 points ($2.00 move = -$30.00 max risk)
 MAX_LOSS_USD = 30.0                  # Max allowed dollar loss floor (-$30.00)
-TRAIL_ACTIVATION_USD = 10.0          # Minimum profit in USD to activate trailing & BE floor (+~$0.67 move)
-TRAIL_PULLBACK_USD = 8.0             # Pullback/drop in USD from peak profit to trigger exit
-MIN_LOCKED_PROFIT_USD = 2.0          # Guaranteed locked profit floor once +$10 is reached (+~$0.13)
+BE_ACTIVATION_USD = 10.0             # Profit threshold to activate Break-Even protection (+$10.00)
+MIN_LOCKED_PROFIT_USD = 2.0          # Break-Even guaranteed floor once +$10 is reached (+$2.00)
+TRAIL_ACTIVATION_USD = 30.0          # Minimum profit in USD to activate peak trailing (+~$2.00 move)
+TRAIL_PULLBACK_USD = 5.0             # Pullback/drop in USD from peak profit to trigger exit ($5.00)
 # NOTE: Recovery zone hedging and all hedging are removed. Strictly 1 trade at a time.
 
 # --- Bot Runtime State ---
@@ -273,19 +274,21 @@ def open_single_trade(symbol, direction):
     )
     
     if res:
-        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | Target: BE at +${TRAIL_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor), Trailing drop: ${TRAIL_PULLBACK_USD:.2f}")
+        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (at +${BE_ACTIVATION_USD:.2f}) | Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f} drop)")
         return res, fill_price
     return None, 0.0
 
 def manage_active_trade(symbol):
     """
-    Manages the single active trade with Trailing Profit Lock, Break-Even floor, and Hard Stop Loss:
-    - Strictly only 1 trade runs at a time.
-    - Hard Stop Loss limit at -$100.00 (broker order + bot check).
-    - Monitors real-time net profit (profit + swap + commission).
-    - Tracks peak profit achieved.
-    - Break-Even / Floor Rule: Once peak touches +$10.00, trade is 100% guaranteed from loss (locks +$2.00 floor).
-    - Trailing Rule: If trade continues higher, closes on an $8.00 drop from peak profit.
+    Manages the single active trade with 2-Stage Protection:
+    1. Downside SL: Hard Stop Loss at -$30.00.
+    2. Zone 1 (Profit between $10 and $30):
+       - Break-Even floor locked at +$2.00.
+       - Does NOT exit on small pullbacks (gives trade room to reach $30).
+       - Exits only if price falls back down to the +$2.00 floor.
+    3. Zone 2 (Profit reaches $30.00+):
+       - Peak trailing activates.
+       - Closes on a -$5.00 pullback from peak profit.
     Returns True if a trade is currently open, False if flat.
     """
     global last_close_time, last_status_log_time, trade_peak_profit
@@ -312,10 +315,12 @@ def manage_active_trade(symbol):
             # Log new high peak if significant or crosses activation
             if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
                 logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f} (Trailing Active, letting profit run)")
+            elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD:
+                logger.info(f"🛡️ Position #{ticket} crossed +${BE_ACTIVATION_USD:.2f}! Break-Even floor locked at +${MIN_LOCKED_PROFIT_USD:.2f}.")
 
     peak = trade_peak_profit[ticket]
     
-    # 1. Hard Downside Protection (-$100.00 max loss)
+    # 1. Hard Downside Protection (-$30.00 max loss)
     if total_pnl <= -MAX_LOSS_USD:
         logger.info(
             f"🛑 Hard Stop Loss Triggered for #{ticket}! "
@@ -326,13 +331,28 @@ def manage_active_trade(symbol):
             trade_peak_profit.pop(ticket, None)
             return False
 
-    # 2. Break-Even & Trailing Profit Lock Exit:
-    # Rule A: Once peak reaches +$10.00, it is 100% guaranteed from loss.
-    # Rule B: Closes if dropped by $8.00 from peak, OR if it pulls back down to the +$2.00 floor.
+    # 2. Zone 1: Break-Even Protection (Profit between $10 and $30)
+    # Peak has touched $10, but not yet $30: do NOT exit on small pullbacks!
+    # Only close if price falls back down to +$2.00 floor to guarantee profit.
+    if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
+        if total_pnl <= MIN_LOCKED_PROFIT_USD:
+            logger.info(
+                f"🛡️ Break-Even Floor Triggered for #{ticket}! "
+                f"Peak reached +${peak:.2f}, but fell back to +${total_pnl:.2f} <= +${MIN_LOCKED_PROFIT_USD:.2f}. "
+                f"Closing position with guaranteed profit..."
+            )
+            if close_position(symbol, position):
+                last_close_time = time.time()
+                trade_peak_profit.pop(ticket, None)
+                logger.info(f"✅ Position #{ticket} closed at Break-Even floor (+${total_pnl:.2f})!")
+                return False
+
+    # 3. Zone 2: Peak Trailing Profit Exit (Active once profit reaches +$30.00+)
+    # Once peak reaches +$30, starts trailing behind peak by $5.00 pullback.
     if peak >= TRAIL_ACTIVATION_USD:
         drop_from_peak = peak - total_pnl
-        if (drop_from_peak >= TRAIL_PULLBACK_USD and total_pnl >= MIN_LOCKED_PROFIT_USD) or (total_pnl <= MIN_LOCKED_PROFIT_USD):
-            exit_reason = f"Drop from Peak (-${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f})" if drop_from_peak >= TRAIL_PULLBACK_USD else "Securing Guaranteed +$2.00 Floor"
+        if drop_from_peak >= TRAIL_PULLBACK_USD or total_pnl <= MIN_LOCKED_PROFIT_USD:
+            exit_reason = f"Drop from Peak (-${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f})" if drop_from_peak >= TRAIL_PULLBACK_USD else "Securing Floor"
             logger.info(
                 f"💰 Trailing Exit Triggered for #{ticket} ({exit_reason})! "
                 f"Peak: +${peak:.2f} | Current: +${total_pnl:.2f}. Closing position to secure profit..."
@@ -348,11 +368,16 @@ def manage_active_trade(symbol):
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        status_trailing = f"ARMED (Floor: +${MIN_LOCKED_PROFIT_USD:.2f})" if peak >= TRAIL_ACTIVATION_USD else f"Waiting for +${TRAIL_ACTIVATION_USD:.2f}"
+        if peak >= TRAIL_ACTIVATION_USD:
+            status_trailing = f"TRAILING ARMED (Peak: +${peak:.2f}, Exit at: +${peak - TRAIL_PULLBACK_USD:.2f})"
+        elif peak >= BE_ACTIVATION_USD:
+            status_trailing = f"BE PROTECTED (+${MIN_LOCKED_PROFIT_USD:.2f} Floor, Aiming for +${TRAIL_ACTIVATION_USD:.2f})"
+        else:
+            status_trailing = f"Waiting for +${BE_ACTIVATION_USD:.2f} (BE)"
         sl_str = f"{position.sl:.2f}" if position.sl > 0 else "None"
         logger.info(
             f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | SL: {sl_str}) | "
-            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f} | Trailing: {status_trailing}"
+            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f} | Status: {status_trailing}"
         )
         
     return True
@@ -376,8 +401,8 @@ def run_bot():
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
     logger.info(f"Trade Volume: {TRADE_VOLUME} lots (1 trade at a time)")
     logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$2.00 move)")
-    logger.info(f"Break-Even Protection: Locks +${MIN_LOCKED_PROFIT_USD:.2f} floor once +${TRAIL_ACTIVATION_USD:.2f} is reached")
-    logger.info(f"Trailing Pullback Exit: -${TRAIL_PULLBACK_USD:.2f} from peak profit")
+    logger.info(f"Break-Even Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (Active between +${BE_ACTIVATION_USD:.2f} and +${TRAIL_ACTIVATION_USD:.2f})")
+    logger.info(f"Peak Trailing: Arms at +${TRAIL_ACTIVATION_USD:.2f} with -${TRAIL_PULLBACK_USD:.2f} drop exit")
     logger.info("=" * 60)
     
     try:
