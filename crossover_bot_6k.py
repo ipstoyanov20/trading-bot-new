@@ -25,14 +25,16 @@ BB_SHIFT = 0                        # Shift 0
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Trade & Trailing Profit Parameters ---
-TRADE_VOLUME = 0.15                  # Volume: 0.15 lots ($1 move in Gold = $15.00)
+TRADE_VOLUME = 0.15                  # Volume: 0.15 lots for all levels ($1 move in Gold = $15.00)
 SL_POINTS = 200                      # Hard Stop Loss: 200 points ($2.00 move = -$30.00 max risk)
-MAX_LOSS_USD = 30.0                  # Max allowed dollar loss floor (-$30.00)
+MAX_LOSS_USD = 30.0                  # Max allowed dollar loss floor per trade (-$30.00)
 BE_ACTIVATION_USD = 10.0             # Profit threshold to activate Break-Even protection (+$10.00)
 MIN_LOCKED_PROFIT_USD = 2.0          # Break-Even guaranteed floor once +$10 is reached (+$2.00)
 TRAIL_ACTIVATION_USD = 30.0          # Minimum profit in USD to activate peak trailing (+~$2.00 move)
 TRAIL_PULLBACK_USD = 5.0             # Pullback/drop in USD from peak profit to trigger exit ($5.00)
-# NOTE: Recovery zone hedging and all hedging are removed. Strictly 1 trade at a time.
+
+# --- Recovery Ladder Parameters ---
+MAX_RECOVERY_LEVEL = 4               # 1 Initial trade + up to 3 recoveries (4 trades max)
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
@@ -41,6 +43,14 @@ last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
 trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
+
+recovery_state = {
+    "is_active": False,
+    "current_level": 0,              # 1 = Initial, 2 = Recovery 1, 3 = Recovery 2, 4 = Recovery 3
+    "direction": None,               # "BUY" or "SELL"
+    "anchor_price": 0.0,             # Entry price of Level 1 trade
+    "last_ticket": None,             # Tracked ticket
+}
 
 def get_filling_type(symbol):
     """
@@ -134,7 +144,7 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
         
     return None, candle_time
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_SingleTrade"):
+def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_SingleTrade", tp_price=0.0, sl_price=0.0):
     """
     Places an order on MT5 with filling mode fallback and returns (result, fill_price).
     """
@@ -156,11 +166,15 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
     point = getattr(symbol_info, 'point', 0.01)
     
     tp = 0.0
-    if tp_points > 0:
+    if tp_price > 0:
+        tp = round(tp_price, digits)
+    elif tp_points > 0:
         tp = round(price + (tp_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price - (tp_points * point), digits)
         
     sl = 0.0
-    if sl_points > 0:
+    if sl_price > 0:
+        sl = round(sl_price, digits)
+    elif sl_points > 0:
         sl = round(price - (sl_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price + (sl_points * point), digits)
         
     request = {
@@ -257,12 +271,36 @@ def close_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
-def open_single_trade(symbol, direction):
+def reset_recovery_state():
+    """Resets the recovery ladder state upon successful recovery or sequence termination."""
+    recovery_state["is_active"] = False
+    recovery_state["current_level"] = 0
+    recovery_state["direction"] = None
+    recovery_state["anchor_price"] = 0.0
+    recovery_state["last_ticket"] = None
+    trade_peak_profit.clear()
+
+def get_last_closed_deal_pnl(symbol, magic=MAGIC_NUMBER):
+    """Fetches PnL and exit price of the last closed deal for this bot."""
+    now = datetime.now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    deals = mt5.history_deals_get(today, now)
+    if not deals:
+        return None, 0.0, 0.0
+    bot_deals = [d for d in deals if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT]
+    if not bot_deals:
+        return None, 0.0, 0.0
+    last_deal = bot_deals[-1]
+    pnl = last_deal.profit + last_deal.swap + last_deal.commission
+    return last_deal.ticket, pnl, last_deal.price
+
+def open_initial_trade(symbol, direction):
     """
-    Opens a single trade (TRADE_VOLUME lots) with hard stop loss (SL_POINTS).
+    Opens Level 1 trade from Bollinger Bands signal.
+    Sets anchor price and initializes recovery ladder state.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_Trailing"
+    comment = f"BB_{direction}_L1"
     
     res, fill_price = place_order_safe(
         symbol=symbol,
@@ -274,93 +312,170 @@ def open_single_trade(symbol, direction):
     )
     
     if res:
-        logger.info(f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (at +${BE_ACTIVATION_USD:.2f}) | Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f} drop)")
+        recovery_state["is_active"] = True
+        recovery_state["current_level"] = 1
+        recovery_state["direction"] = direction
+        recovery_state["anchor_price"] = fill_price
+        recovery_state["last_ticket"] = res.order
+        logger.info(
+            f"🚀 Level 1 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+            f"Anchor: {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f}) | "
+            f"BE: +${BE_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor) | Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f})"
+        )
         return res, fill_price
     return None, 0.0
 
+def open_recovery_trade(symbol, level):
+    """
+    Opens a recovery trade at Level 2, 3, or 4:
+    - Same direction as Level 1
+    - Same volume (TRADE_VOLUME lots)
+    - Take Profit placed at Anchor Price (the beginning of the first trade)
+    - Stop Loss placed at SL_POINTS (200 pts) from new entry price
+    """
+    direction = recovery_state["direction"]
+    anchor = recovery_state["anchor_price"]
+    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
+    comment = f"BB_{direction}_L{level}"
+    
+    res, fill_price = place_order_safe(
+        symbol=symbol,
+        order_type=order_type,
+        volume=TRADE_VOLUME,
+        tp_price=anchor,
+        sl_points=SL_POINTS,
+        comment=comment
+    )
+    
+    if res:
+        recovery_state["current_level"] = level
+        recovery_state["last_ticket"] = res.order
+        logger.info(
+            f"🛡️ Level {level} Recovery Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+            f"Take Profit at Anchor: {anchor:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f})"
+        )
+        return res, fill_price
+    else:
+        logger.error(f"❌ Failed to place Level {level} recovery trade! Terminating recovery sequence.")
+        reset_recovery_state()
+        return None, 0.0
+
 def manage_active_trade(symbol):
     """
-    Manages the single active trade with 2-Stage Protection:
-    1. Downside SL: Hard Stop Loss at -$30.00.
-    2. Zone 1 (Profit between $10 and $30):
-       - Break-Even floor locked at +$2.00.
-       - Does NOT exit on small pullbacks (gives trade room to reach $30).
-       - Exits only if price falls back down to the +$2.00 floor.
-    3. Zone 2 (Profit reaches $30.00+):
-       - Peak trailing activates.
-       - Closes on a -$5.00 pullback from peak profit.
-    Returns True if a trade is currently open, False if flat.
+    Manages the active trade and the 4-Level Recovery Ladder:
+    - Level 1: Break-Even floor (+${MIN_LOCKED_PROFIT_USD:.2f}) at +${BE_ACTIVATION_USD:.2f} and Peak Trailing at +${TRAIL_ACTIVATION_USD:.2f}.
+    - Level 2, 3, 4: Hard Take Profit at initial anchor price (recoups all losses).
+    - If SL hit (-${MAX_LOSS_USD:.2f}):
+      - Level 1 -> Immediately opens Level 2 from SL price.
+      - Level 2 -> Immediately opens Level 3 from SL price.
+      - Level 3 -> Immediately opens Level 4 from SL price.
+      - Level 4 -> Terminates sequence, enforces 60s cooldown.
     """
     global last_close_time, last_status_log_time, trade_peak_profit
     
     positions = get_active_positions(symbol)
+    
+    # CASE A: No active positions found in MT5
     if not positions:
-        if trade_peak_profit:
-            logger.info("ℹ️ Active position was closed (SL hit or external exit). Resetting bot state.")
-            last_close_time = time.time()
-            trade_peak_profit.clear()
+        if recovery_state["is_active"]:
+            ticket, deal_pnl, deal_exit_price = get_last_closed_deal_pnl(symbol)
+            level = recovery_state["current_level"]
+            
+            # Did the trade close in profit (TP hit at broker level)?
+            if deal_pnl is not None and deal_pnl > 0:
+                logger.info(f"🎉 Trade closed in profit (+${deal_pnl:.2f}) at {deal_exit_price:.2f}! Recovery sequence succeeded. Resetting state.")
+                reset_recovery_state()
+                last_close_time = time.time()
+                return False
+            else:
+                # Closed at loss (SL hit at broker level)
+                logger.info(f"⚠️ Level {level} trade was closed at SL (PnL: ${deal_pnl:.2f} at {deal_exit_price:.2f}).")
+                if level < MAX_RECOVERY_LEVEL:
+                    next_level = level + 1
+                    logger.info(f"🔄 Starting Level {next_level} Recovery Trade immediately from SL price...")
+                    trade_peak_profit.clear()
+                    res, _ = open_recovery_trade(symbol, next_level)
+                    return True if res else False
+                else:
+                    logger.warning(f"❌ Level {MAX_RECOVERY_LEVEL} hit SL. Max recovery levels reached (Sequence Loss: -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f}). Waiting for 60s cooldown...")
+                    reset_recovery_state()
+                    last_close_time = time.time()
+                    return False
+                    
+        trade_peak_profit.clear()
         return False
-        
+
+    # CASE B: Trade is currently open
     position = positions[0]
     ticket = position.ticket
     total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
-    
-    # Track and update peak profit
+    level = recovery_state.get("current_level", 1)
+    anchor = recovery_state.get("anchor_price", 0.0)
+    direction = recovery_state.get("direction", "BUY")
+
+    # Track peak profit
     if ticket not in trade_peak_profit:
         trade_peak_profit[ticket] = total_pnl
     else:
         if total_pnl > trade_peak_profit[ticket]:
             old_peak = trade_peak_profit[ticket]
             trade_peak_profit[ticket] = total_pnl
-            # Log new high peak if significant or crosses activation
             if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
-                logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f} (Trailing Active, letting profit run)")
-            elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD:
+                logger.info(f"🔥 New Peak Profit for #{ticket} (L{level}): +${total_pnl:.2f}")
+            elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD and level == 1:
                 logger.info(f"🛡️ Position #{ticket} crossed +${BE_ACTIVATION_USD:.2f}! Break-Even floor locked at +${MIN_LOCKED_PROFIT_USD:.2f}.")
 
     peak = trade_peak_profit[ticket]
-    
-    # 1. Hard Downside Protection (-$30.00 max loss)
-    if total_pnl <= -MAX_LOSS_USD:
-        logger.info(
-            f"🛑 Hard Stop Loss Triggered for #{ticket}! "
-            f"Current P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing position to protect account..."
-        )
-        if close_position(symbol, position):
-            last_close_time = time.time()
-            trade_peak_profit.pop(ticket, None)
-            return False
 
-    # 2. Zone 1: Break-Even Protection (Profit between $10 and $30)
-    # Peak has touched $10, but not yet $30: do NOT exit on small pullbacks!
-    # Only close if price falls back down to +$2.00 floor to guarantee profit.
-    if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
-        if total_pnl <= MIN_LOCKED_PROFIT_USD:
-            logger.info(
-                f"🛡️ Break-Even Floor Triggered for #{ticket}! "
-                f"Peak reached +${peak:.2f}, but fell back to +${total_pnl:.2f} <= +${MIN_LOCKED_PROFIT_USD:.2f}. "
-                f"Closing position with guaranteed profit..."
-            )
-            if close_position(symbol, position):
+    # 1. Hard Downside Protection (-$30.00 max loss check)
+    if total_pnl <= -MAX_LOSS_USD:
+        logger.info(f"🛑 Level {level} hit Stop Loss threshold (P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing position...")
+        if close_position(symbol, position):
+            trade_peak_profit.pop(ticket, None)
+            if level < MAX_RECOVERY_LEVEL:
+                next_level = level + 1
+                logger.info(f"🔄 Starting Level {next_level} Recovery Trade immediately from {position.price_current:.2f}...")
+                res, _ = open_recovery_trade(symbol, next_level)
+                return True if res else False
+            else:
+                logger.warning(f"❌ Level {MAX_RECOVERY_LEVEL} hit SL. Max recovery levels reached (Sequence Loss: -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f}). Waiting for 60s cooldown...")
+                reset_recovery_state()
                 last_close_time = time.time()
-                trade_peak_profit.pop(ticket, None)
-                logger.info(f"✅ Position #{ticket} closed at Break-Even floor (+${total_pnl:.2f})!")
                 return False
 
-    # 3. Zone 2: Peak Trailing Profit Exit (Active once profit reaches +$30.00+)
-    # Once peak reaches +$30, starts trailing behind peak by $5.00 pullback.
-    if peak >= TRAIL_ACTIVATION_USD:
-        drop_from_peak = peak - total_pnl
-        if drop_from_peak >= TRAIL_PULLBACK_USD or total_pnl <= MIN_LOCKED_PROFIT_USD:
-            exit_reason = f"Drop from Peak (-${drop_from_peak:.2f} >= ${TRAIL_PULLBACK_USD:.2f})" if drop_from_peak >= TRAIL_PULLBACK_USD else "Securing Floor"
-            logger.info(
-                f"💰 Trailing Exit Triggered for #{ticket} ({exit_reason})! "
-                f"Peak: +${peak:.2f} | Current: +${total_pnl:.2f}. Closing position to secure profit..."
-            )
+    # 2. Profit Exit Management
+    if level == 1:
+        # Level 1 uses 2-Stage Profit: BE between $10 and $30, Peak Trailing from $30+
+        if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
+            if total_pnl <= MIN_LOCKED_PROFIT_USD:
+                logger.info(f"🛡️ Level 1 Break-Even Floor Triggered! Peak: +${peak:.2f}, dropped to +${total_pnl:.2f}. Securing floor...")
+                if close_position(symbol, position):
+                    reset_recovery_state()
+                    last_close_time = time.time()
+                    return False
+        elif peak >= TRAIL_ACTIVATION_USD:
+            drop_from_peak = peak - total_pnl
+            if drop_from_peak >= TRAIL_PULLBACK_USD or total_pnl <= MIN_LOCKED_PROFIT_USD:
+                logger.info(f"💰 Level 1 Trailing Exit Triggered! Peak: +${peak:.2f}, Current: +${total_pnl:.2f}. Securing profit...")
+                if close_position(symbol, position):
+                    reset_recovery_state()
+                    last_close_time = time.time()
+                    return False
+    else:
+        # Level 2, 3, 4: Target is Anchor Price (the beginning of the first trade)
+        tick = mt5.symbol_info_tick(symbol)
+        anchor_reached = False
+        if tick and anchor > 0:
+            if direction == "BUY" and tick.bid >= anchor:
+                anchor_reached = True
+            elif direction == "SELL" and tick.ask <= anchor:
+                anchor_reached = True
+
+        if anchor_reached:
+            logger.info(f"🎉 Level {level} reached Anchor Price ({anchor:.2f})! Sequence recovered (P&L: +${total_pnl:.2f}). Closing position...")
             if close_position(symbol, position):
+                reset_recovery_state()
                 last_close_time = time.time()
-                trade_peak_profit.pop(ticket, None)
-                logger.info(f"✅ Position #{ticket} closed successfully with +${total_pnl:.2f} profit locked in!")
                 return False
 
     # Periodic status log (every 10 seconds)
@@ -368,22 +483,16 @@ def manage_active_trade(symbol):
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        if peak >= TRAIL_ACTIVATION_USD:
-            status_trailing = f"TRAILING ARMED (Peak: +${peak:.2f}, Exit at: +${peak - TRAIL_PULLBACK_USD:.2f})"
-        elif peak >= BE_ACTIVATION_USD:
-            status_trailing = f"BE PROTECTED (+${MIN_LOCKED_PROFIT_USD:.2f} Floor, Aiming for +${TRAIL_ACTIVATION_USD:.2f})"
-        else:
-            status_trailing = f"Waiting for +${BE_ACTIVATION_USD:.2f} (BE)"
-        sl_str = f"{position.sl:.2f}" if position.sl > 0 else "None"
+        target_str = f"Anchor TP: {anchor:.2f}" if level > 1 else f"Trailing Target (+${TRAIL_ACTIVATION_USD:.2f})"
         logger.info(
-            f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | SL: {sl_str}) | "
-            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f} | Status: {status_trailing}"
+            f"📈 Active L{level} #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | SL: {position.sl:.2f} | {target_str}) | "
+            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f}"
         )
         
     return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single Trade Bot."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Recovery Ladder Bot."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -396,24 +505,25 @@ def run_bot():
         return
         
     logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single Trade Bot")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} 4-Stage Recovery Ladder Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"Trade Volume: {TRADE_VOLUME} lots (1 trade at a time)")
-    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$2.00 move)")
-    logger.info(f"Break-Even Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (Active between +${BE_ACTIVATION_USD:.2f} and +${TRAIL_ACTIVATION_USD:.2f})")
-    logger.info(f"Peak Trailing: Arms at +${TRAIL_ACTIVATION_USD:.2f} with -${TRAIL_PULLBACK_USD:.2f} drop exit")
+    logger.info(f"Trade Volume: {TRADE_VOLUME} lots (Strictly 1 trade at a time)")
+    logger.info(f"Hard Stop Loss per trade: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$2.00 move)")
+    logger.info(f"Level 1: BE at +${BE_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor), Trailing at +${TRAIL_ACTIVATION_USD:.2f} (-${TRAIL_PULLBACK_USD:.2f} drop)")
+    logger.info(f"Recovery Levels 2 to {MAX_RECOVERY_LEVEL}: TP at Anchor Price (Entry of Level 1)")
+    logger.info(f"Max Sequence Risk: 4 trades × -${MAX_LOSS_USD:.2f} = -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f} (2% of account)")
     logger.info("=" * 60)
     
     try:
         while True:
-            # 1. Manage Active Trade (if any) - blocks new entries while a trade is active
+            # 1. Manage Active Trade & Recovery Sequence
             has_active_trade = manage_active_trade(SYMBOL)
             if has_active_trade:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 2. Check Cooldown after Trade Close
+            # 2. Check Cooldown after Sequence Close (only when no recovery is active)
             time_since_last_close = time.time() - last_close_time
             if time_since_last_close < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
@@ -423,8 +533,8 @@ def run_bot():
             signal, candle_time = check_bb_entry_signal(SYMBOL, TIMEFRAME)
             
             if signal and (last_processed_candle_time != candle_time):
-                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
-                res, fill_price = open_single_trade(SYMBOL, signal)
+                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing Level 1 ({TRADE_VOLUME} lots)...")
+                res, fill_price = open_initial_trade(SYMBOL, signal)
                 if res:
                     last_processed_candle_time = candle_time
                     
@@ -440,3 +550,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
