@@ -5,6 +5,7 @@ from datetime import datetime
 import pandas as pd
 
 import config
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 SYMBOL = "XAUUSD"                   # Gold Bot
 TIMEFRAME = mt5.TIMEFRAME_M5        # M5 Timeframe
 SLEEP_INTERVAL = 1                  # 1 second loop interval
-COOLDOWN_SECONDS = 60               # Cooldown between completed trades
+COOLDOWN_SECONDS = 60               # Cooldown between completed grids
 MAGIC_NUMBER = 60020                # Unique identifier for this bot's orders
 DEVIATION = 20                      # Maximum price slippage in points
 
@@ -24,32 +25,29 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade & Trailing Profit Parameters ---
-TRADE_VOLUME = 0.15                  # Volume: 0.15 lots for all levels ($1 move in Gold = $15.00)
-SL_POINTS = 200                      # Hard Stop Loss: 200 points ($2.00 move = -$30.00 max risk)
-MAX_LOSS_USD = 30.0                  # Max allowed dollar loss floor per trade (-$30.00)
-BE_ACTIVATION_USD = 10.0             # Profit threshold to activate Break-Even protection (+$10.00)
-MIN_LOCKED_PROFIT_USD = 2.0          # Break-Even guaranteed floor once +$10 is reached (+$2.00)
-TRAIL_ACTIVATION_USD = 30.0          # Minimum profit in USD to activate peak trailing (+~$2.00 move)
-TRAIL_PULLBACK_USD = 5.0             # Pullback/drop in USD from peak profit to trigger exit ($5.00)
+# --- Hedged Strategy Parameters (No Stop Loss) ---
+FIRST_TRADE_VOLUME = 0.5            # First trade volume = 0.5 lots
+HEDGE_VOLUME = 1.0                  # Second recovery hedge volume = 1.0 lot
 
-# --- Recovery Ladder Parameters ---
-MAX_RECOVERY_LEVEL = 4               # 1 Initial trade + up to 3 recoveries (4 trades max)
+HEDGE_TRIGGER_POINTS = 100          # Open 2nd recovery hedge at 100 points ($1.00) adverse movement from first trade
+HEDGE_EXIT_POINTS = 500             # Close hedged trade when price hits 500 points ($5.00) from first trade
+FIRST_TRADE_TP_POINTS = 500         # First trade Take Profit at 500 points ($5.00) in its favor
+BASKET_TP_USD = 250.0               # Combined basket Take Profit when both trades are open (+$250.00)
+
+# NOTE: All Stop Loss exits are REMOVED entirely as requested.
 
 # --- Bot Runtime State ---
-last_close_time = 0                 # Timestamp of last closed trade
+last_close_time = 0                 # Timestamp of last closed grid basket
 last_processed_candle_time = None   # Timestamp of last processed candle shift 1
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
-trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
 
-recovery_state = {
-    "is_active": False,
-    "current_level": 0,              # 1 = Initial, 2 = Recovery 1, 3 = Recovery 2, 4 = Recovery 3
-    "direction": None,               # "BUY" or "SELL"
-    "anchor_price": 0.0,             # Entry price of Level 1 trade
-    "last_ticket": None,             # Tracked ticket
+grid_state = {
+    "active": False,
+    "initial_direction": None,      # 'BUY' or 'SELL'
+    "anchor_price": 0.0,            # Reference price for first trade
+    "opened_levels": set(),         # Set of level numbers currently placed (e.g. {1, 2})
 }
 
 def get_filling_type(symbol):
@@ -144,7 +142,7 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
         
     return None, candle_time
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_SingleTrade", tp_price=0.0, sl_price=0.0):
+def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Grid"):
     """
     Places an order on MT5 with filling mode fallback and returns (result, fill_price).
     """
@@ -166,15 +164,11 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
     point = getattr(symbol_info, 'point', 0.01)
     
     tp = 0.0
-    if tp_price > 0:
-        tp = round(tp_price, digits)
-    elif tp_points > 0:
+    if tp_points > 0:
         tp = round(price + (tp_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price - (tp_points * point), digits)
         
     sl = 0.0
-    if sl_price > 0:
-        sl = round(sl_price, digits)
-    elif sl_points > 0:
+    if sl_points > 0:
         sl = round(price - (sl_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price + (sl_points * point), digits)
         
     request = {
@@ -204,7 +198,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
             action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | TP: {tp} | SL: {sl} | Filling: {mode}")
+            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | TP: {tp} | Filling: {mode}")
             return res, price
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue
@@ -215,7 +209,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
     logger.error(f"Failed to place order ({comment}): {err} | Request: {request}")
     return None, 0.0
 
-def get_active_positions(symbol):
+def get_active_grid_positions(symbol):
     """
     Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically.
     """
@@ -226,7 +220,7 @@ def get_active_positions(symbol):
     bot_positions.sort(key=lambda p: p.time)
     return bot_positions
 
-def close_position(symbol, position):
+def close_grid_position(symbol, position):
     """Closes a single MT5 position safely."""
     tick = mt5.symbol_info_tick(symbol)
     if not tick:
@@ -271,258 +265,230 @@ def close_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
-def reset_recovery_state():
-    """Resets the recovery ladder state upon successful recovery or sequence termination."""
-    recovery_state["is_active"] = False
-    recovery_state["current_level"] = 0
-    recovery_state["direction"] = None
-    recovery_state["anchor_price"] = 0.0
-    recovery_state["last_ticket"] = None
-    trade_peak_profit.clear()
+def close_all_grid_positions(symbol, reason="Grid Close"):
+    """Closes all open positions belonging to this bot."""
+    global last_close_time
+    positions = get_active_grid_positions(symbol)
+    if not positions:
+        return True
+        
+    logger.info(f"Closing all {len(positions)} grid positions: {reason}")
+    all_closed = True
+    for p in positions:
+        if not close_grid_position(symbol, p):
+            all_closed = False
+            
+    last_close_time = time.time()
+    return all_closed
 
-def get_deal_pnl_by_position(ticket, symbol=SYMBOL, magic=MAGIC_NUMBER):
+def sync_grid_state(symbol):
     """
-    Fetches the closing deal PnL for a specific position ticket.
-    Retries up to 6 times with 100ms pauses (600ms total) to allow MT5 to write the deal to database.
-    If ticket is unknown, falls back safely to the latest closed deal for this magic number.
+    Synchronizes grid_state with live MT5 positions.
+    Handles bot restart gracefully without duplicating positions.
     """
-    # 1. Primary: Match exact position ticket
-    if ticket:
-        for attempt in range(6):
-            deals = mt5.history_deals_get(position=ticket)
-            if deals:
-                out_deals = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
-                if out_deals:
-                    deal = out_deals[-1]
-                    pnl = deal.profit + deal.swap + getattr(deal, 'commission', 0.0)
-                    return deal.ticket, pnl, deal.price
-            time.sleep(0.1)
+    positions = get_active_grid_positions(symbol)
+    if not positions:
+        if grid_state["active"]:
+            logger.info("All grid positions are closed. Resetting grid state.")
+            grid_state["active"] = False
+            grid_state["initial_direction"] = None
+            grid_state["anchor_price"] = 0.0
+            grid_state["opened_levels"].clear()
+        return positions
+        
+    grid_state["active"] = True
+    
+    # Reconstruct opened levels from comments or chronological order
+    opened_levels = set()
+    for idx, p in enumerate(positions):
+        lvl = None
+        if p.comment and "BB_Grid_L" in p.comment:
+            try:
+                part = p.comment.split("BB_Grid_L")[1]
+                lvl = int(part[0])
+            except (IndexError, ValueError):
+                lvl = None
+        if lvl is None:
+            lvl = idx + 1
+        opened_levels.add(lvl)
+        
+    grid_state["opened_levels"] = opened_levels
+    
+    # Level 1 defines initial direction and anchor price
+    pos_l1 = None
+    for p in positions:
+        if p.comment and "BB_Grid_L1" in p.comment:
+            pos_l1 = p
+            break
+    if pos_l1 is None and len(positions) > 0:
+        pos_l1 = positions[0]
+        
+    if pos_l1:
+        initial_dir = "BUY" if pos_l1.type == mt5.POSITION_TYPE_BUY else "SELL"
+        grid_state["initial_direction"] = initial_dir
+        if grid_state["anchor_price"] == 0.0:
+            grid_state["anchor_price"] = pos_l1.price_open
+            
+    return positions
 
-    # 2. Fallback: Query today's deals, waiting briefly if needed
-    for attempt in range(4):
-        now = datetime.now()
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        deals = mt5.history_deals_get(today, now)
-        if deals:
-            bot_deals = [d for d in deals if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT]
-            if bot_deals:
-                deal = bot_deals[-1]
-                # If we know the ticket, ensure we don't return an older deal
-                if ticket and getattr(deal, 'position_id', None) != ticket:
-                    time.sleep(0.1)
-                    continue
-                pnl = deal.profit + deal.swap + getattr(deal, 'commission', 0.0)
-                return deal.ticket, pnl, deal.price
-        time.sleep(0.1)
-
-    return None, 0.0, 0.0
-
-def open_initial_trade(symbol, direction):
+def place_grid_level(symbol, direction, level):
     """
-    Opens Level 1 trade from Bollinger Bands signal.
-    Sets anchor price and initializes recovery ladder state.
+    Places an order for Level 1 (first trade, FIRST_TRADE_VOLUME) or Level 2 (recovery hedge, HEDGE_VOLUME).
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_L1"
+    comment = f"BB_Grid_L{level}_{direction}"
+    volume = FIRST_TRADE_VOLUME if level == 1 else HEDGE_VOLUME
     
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
-        volume=TRADE_VOLUME,
+        volume=volume,
         tp_points=0,
-        sl_points=SL_POINTS,
+        sl_points=0,
         comment=comment
     )
     
     if res:
-        recovery_state["is_active"] = True
-        recovery_state["current_level"] = 1
-        recovery_state["direction"] = direction
-        recovery_state["anchor_price"] = fill_price
-        recovery_state["last_ticket"] = getattr(res, 'order', None)
-        logger.info(
-            f"🚀 Level 1 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"Anchor: {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f}) | "
-            f"BE: +${BE_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor) | Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f})"
-        )
+        grid_state["active"] = True
+        grid_state["opened_levels"].add(level)
+        if level == 1:
+            grid_state["initial_direction"] = direction
+            grid_state["anchor_price"] = fill_price
+            logger.info(f"🎯 First Trade Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor: {fill_price:.2f})")
+        else:
+            logger.info(f"🛡️ 2nd Recovery Hedge Placed: Level 2 {direction} at {fill_price:.2f} | Vol: {volume}")
         return res, fill_price
     return None, 0.0
 
-def open_recovery_trade(symbol, level):
+def manage_hedged_grid(symbol):
     """
-    Opens a recovery trade at Level 2, 3, or 4:
-    - Same direction as Level 1
-    - Same volume (TRADE_VOLUME lots)
-    - Take Profit placed at Anchor Price (the beginning of the first trade)
-    - Stop Loss placed at SL_POINTS (200 pts) from new entry price
-    - Retries up to 3 times if broker temporarily rejects due to slippage
+    Manages active trades for Hedged Strategy:
+    1. Triggers 2nd recovery hedge (HEDGE_VOLUME) when price moves 100 points against first trade.
+    2. Closes the hedged trade when price hits 500 points from the first trade anchor.
+    3. Closes first trade when price hits 500 points in its favor (Take Profit).
+    4. Closes all trades together if combined basket net profit >= +$250.00.
+    5. Stop Loss is REMOVED ENTIRELY (no SL exits).
+    Returns True if positions remain open, False otherwise.
     """
-    direction = recovery_state["direction"]
-    anchor = recovery_state["anchor_price"]
-    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_L{level}"
+    global last_status_log_time
     
-    for attempt in range(3):
-        res, fill_price = place_order_safe(
-            symbol=symbol,
-            order_type=order_type,
-            volume=TRADE_VOLUME,
-            tp_price=anchor,
-            sl_points=SL_POINTS,
-            comment=comment
-        )
-        
-        if res:
-            recovery_state["current_level"] = level
-            recovery_state["last_ticket"] = getattr(res, 'order', None)
-            logger.info(
-                f"🛡️ Level {level} Recovery Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-                f"Take Profit at Anchor: {anchor:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f})"
-            )
-            return res, fill_price
-        else:
-            logger.warning(f"⚠️ Attempt {attempt + 1}/3 to place Level {level} recovery trade failed. Retrying in 0.5s...")
-            time.sleep(0.5)
-
-    logger.error(f"❌ Failed to place Level {level} recovery trade after 3 attempts! Terminating recovery sequence.")
-    reset_recovery_state()
-    return None, 0.0
-
-def manage_active_trade(symbol):
-    """
-    Manages the active trade and the 4-Level Recovery Ladder:
-    - Level 1: Break-Even floor (+${MIN_LOCKED_PROFIT_USD:.2f}) at +${BE_ACTIVATION_USD:.2f} and Peak Trailing at +${TRAIL_ACTIVATION_USD:.2f}.
-    - Level 2, 3, 4: Hard Take Profit at initial anchor price (recoups all losses).
-    - If SL hit (-${MAX_LOSS_USD:.2f}):
-      - Level 1 -> Immediately opens Level 2 from SL price.
-      - Level 2 -> Immediately opens Level 3 from SL price.
-      - Level 3 -> Immediately opens Level 4 from SL price.
-      - Level 4 -> Terminates sequence, enforces 60s cooldown.
-    """
-    global last_close_time, last_status_log_time, trade_peak_profit
-    
-    positions = get_active_positions(symbol)
-    
-    # CASE A: No active positions found in MT5
+    positions = sync_grid_state(symbol)
     if not positions:
-        if recovery_state["is_active"]:
-            last_ticket = recovery_state.get("last_ticket")
-            deal_ticket, deal_pnl, deal_exit_price = get_deal_pnl_by_position(last_ticket)
-            level = recovery_state["current_level"]
+        return False
+        
+    symbol_info = mt5.symbol_info(symbol)
+    if not symbol_info:
+        return True
+        
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        return True
+        
+    point = getattr(symbol_info, 'point', 0.01)
+    anchor = grid_state["anchor_price"]
+    initial_dir = grid_state["initial_direction"]
+    
+    # Identify Level 1 (first trade) and Level 2 (hedge trade)
+    pos_l1 = None
+    pos_l2 = None
+    for p in positions:
+        if p.comment and "BB_Grid_L2" in p.comment:
+            pos_l2 = p
+        elif p.comment and "BB_Grid_L1" in p.comment:
+            pos_l1 = p
             
-            # Did the trade close in profit (TP hit at broker level)?
-            if deal_pnl is not None and deal_pnl > 0:
-                logger.info(f"🎉 Level {level} trade closed in profit (+${deal_pnl:.2f}) at {deal_exit_price:.2f}! Recovery sequence succeeded. Resetting state.")
-                reset_recovery_state()
-                last_close_time = time.time()
-                return False
-            else:
-                # Closed at loss (SL hit at broker level)
-                logger.info(f"⚠️ Level {level} trade was closed at SL (PnL: ${deal_pnl:.2f} at {deal_exit_price:.2f}).")
-                if level < MAX_RECOVERY_LEVEL:
-                    next_level = level + 1
-                    logger.info(f"🔄 Starting Level {next_level} Recovery Trade immediately from SL price...")
-                    trade_peak_profit.clear()
-                    res, _ = open_recovery_trade(symbol, next_level)
-                    return True if res else False
-                else:
-                    logger.warning(f"❌ Level {MAX_RECOVERY_LEVEL} hit SL. Max recovery levels reached (Sequence Loss: -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f}). Waiting for 60s cooldown...")
-                    reset_recovery_state()
-                    last_close_time = time.time()
-                    return False
-                    
-        trade_peak_profit.clear()
+    # Chronological fallback
+    if pos_l1 is None and len(positions) > 0:
+        pos_l1 = positions[0]
+    if pos_l2 is None and len(positions) > 1:
+        pos_l2 = positions[1]
+
+    total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
+
+    # 1. Combined Basket Take Profit Check: If both trades are open and net profit >= +$250
+    if len(positions) > 1 and total_pnl >= BASKET_TP_USD:
+        close_all_grid_positions(symbol, f"🎯 Combined Basket TP Reached: +${total_pnl:.2f} >= +${BASKET_TP_USD:.2f}")
         return False
 
-    # CASE B: Trade is currently open
-    position = positions[0]
-    ticket = position.ticket
-    recovery_state["last_ticket"] = ticket  # Always sync exact active ticket
-    total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
-    level = recovery_state.get("current_level", 1)
-    anchor = recovery_state.get("anchor_price", 0.0)
-    direction = recovery_state.get("direction", "BUY")
+    # 2. First Trade (Level 1) Take Profit at 500 points in its favor (when hedge is not open)
+    if pos_l1 is not None and pos_l2 is None:
+        l1_tp_dist = FIRST_TRADE_TP_POINTS * point
+        l1_tp_hit = False
+        if initial_dir == "BUY" and tick.bid >= anchor + l1_tp_dist:
+            l1_tp_hit = True
+        elif initial_dir == "SELL" and tick.ask <= anchor - l1_tp_dist:
+            l1_tp_hit = True
+            
+        if l1_tp_hit:
+            close_grid_position(symbol, pos_l1)
+            logger.info(f"🎯 First Trade ({initial_dir}) Take Profit hit at 500 points from anchor {anchor:.2f}!")
+            sync_grid_state(symbol)
+            return len(get_active_grid_positions(symbol)) > 0
 
-    # Track peak profit
-    if ticket not in trade_peak_profit:
-        trade_peak_profit[ticket] = total_pnl
-    else:
-        if total_pnl > trade_peak_profit[ticket]:
-            old_peak = trade_peak_profit[ticket]
-            trade_peak_profit[ticket] = total_pnl
-            if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
-                logger.info(f"🔥 New Peak Profit for #{ticket} (L{level}): +${total_pnl:.2f}")
-            elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD and level == 1:
-                logger.info(f"🛡️ Position #{ticket} crossed +${BE_ACTIVATION_USD:.2f}! Break-Even floor locked at +${MIN_LOCKED_PROFIT_USD:.2f}.")
+    # 3. Trigger 2nd Recovery Hedge (Level 2) at 100 points against first trade
+    if pos_l2 is None and (2 not in grid_state["opened_levels"]):
+        hedge_trigger_dist = HEDGE_TRIGGER_POINTS * point
+        if initial_dir == "BUY":
+            # If price drops 100 points below first trade anchor -> Open SELL hedge
+            if tick.bid <= anchor - hedge_trigger_dist:
+                logger.info(
+                    f"🛡️ Triggering 2nd Recovery Hedge (SELL {HEDGE_VOLUME} lots): "
+                    f"Price {tick.bid:.2f} <= {anchor - hedge_trigger_dist:.2f} (100 pts below {anchor:.2f})"
+                )
+                place_grid_level(symbol, "SELL", level=2)
+        elif initial_dir == "SELL":
+            # If price rises 100 points above first trade anchor -> Open BUY hedge
+            if tick.ask >= anchor + hedge_trigger_dist:
+                logger.info(
+                    f"🛡️ Triggering 2nd Recovery Hedge (BUY {HEDGE_VOLUME} lots): "
+                    f"Price {tick.ask:.2f} >= {anchor + hedge_trigger_dist:.2f} (100 pts above {anchor:.2f})"
+                )
+                place_grid_level(symbol, "BUY", level=2)
 
-    peak = trade_peak_profit[ticket]
-
-    # 1. Hard Downside Protection (-$30.00 max loss check)
-    if total_pnl <= -MAX_LOSS_USD:
-        logger.info(f"🛑 Level {level} hit Stop Loss threshold (P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing position...")
-        if close_position(symbol, position):
-            trade_peak_profit.pop(ticket, None)
-            if level < MAX_RECOVERY_LEVEL:
-                next_level = level + 1
-                logger.info(f"🔄 Starting Level {next_level} Recovery Trade immediately from {position.price_current:.2f}...")
-                res, _ = open_recovery_trade(symbol, next_level)
-                return True if res else False
-            else:
-                logger.warning(f"❌ Level {MAX_RECOVERY_LEVEL} hit SL. Max recovery levels reached (Sequence Loss: -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f}). Waiting for 60s cooldown...")
-                reset_recovery_state()
-                last_close_time = time.time()
-                return False
-
-    # 2. Profit Exit Management
-    if level == 1:
-        # Level 1 uses 2-Stage Profit: BE between $10 and $30, Peak Trailing from $30+
-        if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
-            if total_pnl <= MIN_LOCKED_PROFIT_USD:
-                logger.info(f"🛡️ Level 1 Break-Even Floor Triggered! Peak: +${peak:.2f}, dropped to +${total_pnl:.2f}. Securing floor...")
-                if close_position(symbol, position):
-                    reset_recovery_state()
-                    last_close_time = time.time()
-                    return False
-        elif peak >= TRAIL_ACTIVATION_USD:
-            drop_from_peak = peak - total_pnl
-            if drop_from_peak >= TRAIL_PULLBACK_USD or total_pnl <= MIN_LOCKED_PROFIT_USD:
-                logger.info(f"💰 Level 1 Trailing Exit Triggered! Peak: +${peak:.2f}, Current: +${total_pnl:.2f}. Securing profit...")
-                if close_position(symbol, position):
-                    reset_recovery_state()
-                    last_close_time = time.time()
-                    return False
-    else:
-        # Level 2, 3, 4: Target is Anchor Price (the beginning of the first trade)
-        tick = mt5.symbol_info_tick(symbol)
-        anchor_reached = False
-        if tick and anchor > 0:
-            if direction == "BUY" and tick.bid >= anchor:
-                anchor_reached = True
-            elif direction == "SELL" and tick.ask <= anchor:
-                anchor_reached = True
-
-        if anchor_reached:
-            logger.info(f"🎉 Level {level} reached Anchor Price ({anchor:.2f})! Sequence recovered (P&L: +${total_pnl:.2f}). Closing position...")
-            if close_position(symbol, position):
-                reset_recovery_state()
-                last_close_time = time.time()
-                return False
+    # 4. Close the Hedged Trade when price reaches 500 points from the first trade
+    if pos_l2 is None:
+        # Check if it was just opened
+        positions_now = get_active_grid_positions(symbol)
+        for p in positions_now:
+            if p.comment and "BB_Grid_L2" in p.comment or (pos_l1 and p.ticket != pos_l1.ticket):
+                pos_l2 = p
+                
+    if pos_l2 is not None:
+        hedge_exit_dist = HEDGE_EXIT_POINTS * point
+        hedge_exit_hit = False
+        
+        if initial_dir == "BUY":
+            # First trade was BUY at anchor; hedge is SELL.
+            # Close hedge when price drops to 500 points below first trade anchor
+            if tick.bid <= anchor - hedge_exit_dist:
+                hedge_exit_hit = True
+        elif initial_dir == "SELL":
+            # First trade was SELL at anchor; hedge is BUY.
+            # Close hedge when price rises to 500 points above first trade anchor
+            if tick.ask >= anchor + hedge_exit_dist:
+                hedge_exit_hit = True
+                
+        if hedge_exit_hit:
+            close_grid_position(symbol, pos_l2)
+            grid_state["opened_levels"].discard(2)
+            logger.info(f"🎯 Hedged Trade closed at 500 points from first trade (Anchor: {anchor:.2f})! Profit secured.")
+            sync_grid_state(symbol)
 
     # Periodic status log (every 10 seconds)
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
-        trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        target_str = f"Anchor TP: {anchor:.2f}" if level > 1 else f"Trailing Target (+${TRAIL_ACTIVATION_USD:.2f})"
-        logger.info(
-            f"📈 Active L{level} #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | SL: {position.sl:.2f} | {target_str}) | "
-            f"P&L: ${total_pnl:.2f} | Peak: ${peak:.2f}"
-        )
-        
-    return True
+        pos_details = []
+        for p in positions:
+            d = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+            pos_details.append(f"#{p.ticket} ({d} {p.volume}l @ {p.price_open:.2f} PnL:${p.profit:.2f})")
+        logger.info(f"📊 Active Grid ({len(positions)} trades): {' | '.join(pos_details)} | Basket Net: ${total_pnl:.2f} | Anchor: {anchor:.2f}")
+
+    # NOTE: Stop Loss is REMOVED ENTIRELY — no stop loss exits.
+    return len(get_active_grid_positions(symbol)) > 0
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Recovery Ladder Bot."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Hedged Strategy Bot (No Stop Loss)."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -535,25 +501,25 @@ def run_bot():
         return
         
     logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} 4-Stage Recovery Ladder Bot")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Hedged Strategy Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"Trade Volume: {TRADE_VOLUME} lots (Strictly 1 trade at a time)")
-    logger.info(f"Hard Stop Loss per trade: -${MAX_LOSS_USD:.2f} ({SL_POINTS} points / ~$2.00 move)")
-    logger.info(f"Level 1: BE at +${BE_ACTIVATION_USD:.2f} (+${MIN_LOCKED_PROFIT_USD:.2f} floor), Trailing at +${TRAIL_ACTIVATION_USD:.2f} (-${TRAIL_PULLBACK_USD:.2f} drop)")
-    logger.info(f"Recovery Levels 2 to {MAX_RECOVERY_LEVEL}: TP at Anchor Price (Entry of Level 1)")
-    logger.info(f"Max Sequence Risk: 4 trades × -${MAX_LOSS_USD:.2f} = -${MAX_RECOVERY_LEVEL * MAX_LOSS_USD:.2f} (2% of account)")
+    logger.info(f"First Trade Volume: {FIRST_TRADE_VOLUME} lots | TP: {FIRST_TRADE_TP_POINTS} pts")
+    logger.info(f"2nd Recovery Hedge: {HEDGE_VOLUME} lots at {HEDGE_TRIGGER_POINTS} pts against first trade")
+    logger.info(f"Hedge Exit: Closes at {HEDGE_EXIT_POINTS} pts from first trade")
+    logger.info(f"Combined Basket TP: +${BASKET_TP_USD:.2f}")
+    logger.info(f"Stop Loss: REMOVED ENTIRELY (No SL)")
     logger.info("=" * 60)
     
     try:
         while True:
-            # 1. Manage Active Trade & Recovery Sequence
-            has_active_trade = manage_active_trade(SYMBOL)
-            if has_active_trade:
+            # 1. Manage Open Hedged Grid (if any)
+            has_active_grid = manage_hedged_grid(SYMBOL)
+            if has_active_grid:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 2. Check Cooldown after Sequence Close (only when no recovery is active)
+            # 2. Check Cooldown after Grid Close
             time_since_last_close = time.time() - last_close_time
             if time_since_last_close < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
@@ -563,8 +529,8 @@ def run_bot():
             signal, candle_time = check_bb_entry_signal(SYMBOL, TIMEFRAME)
             
             if signal and (last_processed_candle_time != candle_time):
-                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing Level 1 ({TRADE_VOLUME} lots)...")
-                res, fill_price = open_initial_trade(SYMBOL, signal)
+                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing Level 1 ({FIRST_TRADE_VOLUME} lots)...")
+                res, fill_price = place_grid_level(SYMBOL, signal, level=1)
                 if res:
                     last_processed_candle_time = candle_time
                     
@@ -580,4 +546,3 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-
