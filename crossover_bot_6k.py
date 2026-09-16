@@ -280,19 +280,42 @@ def reset_recovery_state():
     recovery_state["last_ticket"] = None
     trade_peak_profit.clear()
 
-def get_last_closed_deal_pnl(symbol, magic=MAGIC_NUMBER):
-    """Fetches PnL and exit price of the last closed deal for this bot."""
-    now = datetime.now()
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    deals = mt5.history_deals_get(today, now)
-    if not deals:
-        return None, 0.0, 0.0
-    bot_deals = [d for d in deals if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT]
-    if not bot_deals:
-        return None, 0.0, 0.0
-    last_deal = bot_deals[-1]
-    pnl = last_deal.profit + last_deal.swap + last_deal.commission
-    return last_deal.ticket, pnl, last_deal.price
+def get_deal_pnl_by_position(ticket, symbol=SYMBOL, magic=MAGIC_NUMBER):
+    """
+    Fetches the closing deal PnL for a specific position ticket.
+    Retries up to 6 times with 100ms pauses (600ms total) to allow MT5 to write the deal to database.
+    If ticket is unknown, falls back safely to the latest closed deal for this magic number.
+    """
+    # 1. Primary: Match exact position ticket
+    if ticket:
+        for attempt in range(6):
+            deals = mt5.history_deals_get(position=ticket)
+            if deals:
+                out_deals = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+                if out_deals:
+                    deal = out_deals[-1]
+                    pnl = deal.profit + deal.swap + getattr(deal, 'commission', 0.0)
+                    return deal.ticket, pnl, deal.price
+            time.sleep(0.1)
+
+    # 2. Fallback: Query today's deals, waiting briefly if needed
+    for attempt in range(4):
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        deals = mt5.history_deals_get(today, now)
+        if deals:
+            bot_deals = [d for d in deals if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT]
+            if bot_deals:
+                deal = bot_deals[-1]
+                # If we know the ticket, ensure we don't return an older deal
+                if ticket and getattr(deal, 'position_id', None) != ticket:
+                    time.sleep(0.1)
+                    continue
+                pnl = deal.profit + deal.swap + getattr(deal, 'commission', 0.0)
+                return deal.ticket, pnl, deal.price
+        time.sleep(0.1)
+
+    return None, 0.0, 0.0
 
 def open_initial_trade(symbol, direction):
     """
@@ -316,7 +339,7 @@ def open_initial_trade(symbol, direction):
         recovery_state["current_level"] = 1
         recovery_state["direction"] = direction
         recovery_state["anchor_price"] = fill_price
-        recovery_state["last_ticket"] = res.order
+        recovery_state["last_ticket"] = getattr(res, 'order', None)
         logger.info(
             f"🚀 Level 1 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
             f"Anchor: {fill_price:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f}) | "
@@ -332,33 +355,38 @@ def open_recovery_trade(symbol, level):
     - Same volume (TRADE_VOLUME lots)
     - Take Profit placed at Anchor Price (the beginning of the first trade)
     - Stop Loss placed at SL_POINTS (200 pts) from new entry price
+    - Retries up to 3 times if broker temporarily rejects due to slippage
     """
     direction = recovery_state["direction"]
     anchor = recovery_state["anchor_price"]
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     comment = f"BB_{direction}_L{level}"
     
-    res, fill_price = place_order_safe(
-        symbol=symbol,
-        order_type=order_type,
-        volume=TRADE_VOLUME,
-        tp_price=anchor,
-        sl_points=SL_POINTS,
-        comment=comment
-    )
-    
-    if res:
-        recovery_state["current_level"] = level
-        recovery_state["last_ticket"] = res.order
-        logger.info(
-            f"🛡️ Level {level} Recovery Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"Take Profit at Anchor: {anchor:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f})"
+    for attempt in range(3):
+        res, fill_price = place_order_safe(
+            symbol=symbol,
+            order_type=order_type,
+            volume=TRADE_VOLUME,
+            tp_price=anchor,
+            sl_points=SL_POINTS,
+            comment=comment
         )
-        return res, fill_price
-    else:
-        logger.error(f"❌ Failed to place Level {level} recovery trade! Terminating recovery sequence.")
-        reset_recovery_state()
-        return None, 0.0
+        
+        if res:
+            recovery_state["current_level"] = level
+            recovery_state["last_ticket"] = getattr(res, 'order', None)
+            logger.info(
+                f"🛡️ Level {level} Recovery Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+                f"Take Profit at Anchor: {anchor:.2f} | Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f})"
+            )
+            return res, fill_price
+        else:
+            logger.warning(f"⚠️ Attempt {attempt + 1}/3 to place Level {level} recovery trade failed. Retrying in 0.5s...")
+            time.sleep(0.5)
+
+    logger.error(f"❌ Failed to place Level {level} recovery trade after 3 attempts! Terminating recovery sequence.")
+    reset_recovery_state()
+    return None, 0.0
 
 def manage_active_trade(symbol):
     """
@@ -378,12 +406,13 @@ def manage_active_trade(symbol):
     # CASE A: No active positions found in MT5
     if not positions:
         if recovery_state["is_active"]:
-            ticket, deal_pnl, deal_exit_price = get_last_closed_deal_pnl(symbol)
+            last_ticket = recovery_state.get("last_ticket")
+            deal_ticket, deal_pnl, deal_exit_price = get_deal_pnl_by_position(last_ticket)
             level = recovery_state["current_level"]
             
             # Did the trade close in profit (TP hit at broker level)?
             if deal_pnl is not None and deal_pnl > 0:
-                logger.info(f"🎉 Trade closed in profit (+${deal_pnl:.2f}) at {deal_exit_price:.2f}! Recovery sequence succeeded. Resetting state.")
+                logger.info(f"🎉 Level {level} trade closed in profit (+${deal_pnl:.2f}) at {deal_exit_price:.2f}! Recovery sequence succeeded. Resetting state.")
                 reset_recovery_state()
                 last_close_time = time.time()
                 return False
@@ -408,6 +437,7 @@ def manage_active_trade(symbol):
     # CASE B: Trade is currently open
     position = positions[0]
     ticket = position.ticket
+    recovery_state["last_ticket"] = ticket  # Always sync exact active ticket
     total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
     level = recovery_state.get("current_level", 1)
     anchor = recovery_state.get("anchor_price", 0.0)
