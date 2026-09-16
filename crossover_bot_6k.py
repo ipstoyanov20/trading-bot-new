@@ -26,13 +26,13 @@ BB_SHIFT = 0                        # Shift 0
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Hedged Strategy Parameters (No Stop Loss) ---
-FIRST_TRADE_VOLUME = 0.5            # First trade volume = 0.5 lots
-HEDGE_VOLUME = 1.0                  # Second recovery hedge volume = 1.0 lot
+FIRST_TRADE_VOLUME = 0.15           # First trade volume = 0.15 lots ($1.00 move on Gold = $15.00)
+HEDGE_VOLUME = 0.15                 # Recovery hedge volume = 0.15 lots (fits margin cleanly in $6K account)
 
 HEDGE_TRIGGER_POINTS = 100          # Open 2nd recovery hedge at 100 points ($1.00) adverse movement from first trade
-HEDGE_EXIT_POINTS = 500             # Close hedged trade when price hits 500 points ($5.00) from first trade
+HEDGE_EXIT_POINTS = 500             # Close hedged trade when it gains 500 points ($5.00) from ITS OWN entry price
 FIRST_TRADE_TP_POINTS = 500         # First trade Take Profit at 500 points ($5.00) in its favor
-BASKET_TP_USD = 250.0               # Combined basket Take Profit when both trades are open (+$250.00)
+BASKET_TP_USD = 30.0                # Combined basket Take Profit when both trades are open (+$30.00 net)
 
 # NOTE: All Stop Loss exits are REMOVED entirely as requested.
 
@@ -46,8 +46,10 @@ last_status_log_time = 0            # Timestamp of periodic open trade status lo
 grid_state = {
     "active": False,
     "initial_direction": None,      # 'BUY' or 'SELL'
-    "anchor_price": 0.0,            # Reference price for first trade
-    "opened_levels": set(),         # Set of level numbers currently placed (e.g. {1, 2})
+    "anchor_price": 0.0,            # Entry price of first trade
+    "hedge_entry_price": 0.0,       # Entry price of recovery hedge trade
+    "hedge_triggered": False,       # Flag to prevent infinite re-opening loops
+    "opened_levels": set(),         # Set of active level numbers (e.g. {1, 2})
 }
 
 def get_filling_type(symbol):
@@ -293,6 +295,8 @@ def sync_grid_state(symbol):
             grid_state["active"] = False
             grid_state["initial_direction"] = None
             grid_state["anchor_price"] = 0.0
+            grid_state["hedge_entry_price"] = 0.0
+            grid_state["hedge_triggered"] = False
             grid_state["opened_levels"].clear()
         return positions
         
@@ -314,6 +318,10 @@ def sync_grid_state(symbol):
         
     grid_state["opened_levels"] = opened_levels
     
+    # If Level 2 is active, ensure hedge_triggered is True
+    if 2 in opened_levels:
+        grid_state["hedge_triggered"] = True
+    
     # Level 1 defines initial direction and anchor price
     pos_l1 = None
     for p in positions:
@@ -333,7 +341,7 @@ def sync_grid_state(symbol):
 
 def place_grid_level(symbol, direction, level):
     """
-    Places an order for Level 1 (first trade, FIRST_TRADE_VOLUME) or Level 2 (recovery hedge, HEDGE_VOLUME).
+    Places an order for Level 1 (first trade) or Level 2 (recovery hedge).
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     comment = f"BB_Grid_L{level}_{direction}"
@@ -354,19 +362,22 @@ def place_grid_level(symbol, direction, level):
         if level == 1:
             grid_state["initial_direction"] = direction
             grid_state["anchor_price"] = fill_price
+            grid_state["hedge_triggered"] = False
             logger.info(f"🎯 First Trade Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor: {fill_price:.2f})")
         else:
-            logger.info(f"🛡️ 2nd Recovery Hedge Placed: Level 2 {direction} at {fill_price:.2f} | Vol: {volume}")
+            grid_state["hedge_entry_price"] = fill_price
+            grid_state["hedge_triggered"] = True
+            logger.info(f"🛡️ 2nd Recovery Hedge Placed: Level 2 {direction} at {fill_price:.2f} | Vol: {volume} (Hedge Entry: {fill_price:.2f})")
         return res, fill_price
     return None, 0.0
 
 def manage_hedged_grid(symbol):
     """
     Manages active trades for Hedged Strategy:
-    1. Triggers 2nd recovery hedge (HEDGE_VOLUME) when price moves 100 points against first trade.
-    2. Closes the hedged trade when price hits 500 points from the first trade anchor.
+    1. Triggers 2nd recovery hedge (HEDGE_VOLUME) once when price moves 100 points against first trade.
+    2. Closes the hedged trade when it gains 500 points from ITS OWN entry price.
     3. Closes first trade when price hits 500 points in its favor (Take Profit).
-    4. Closes all trades together if combined basket net profit >= +$250.00.
+    4. Closes all trades together if combined basket net profit >= +$30.00.
     5. Stop Loss is REMOVED ENTIRELY (no SL exits).
     Returns True if positions remain open, False otherwise.
     """
@@ -405,7 +416,7 @@ def manage_hedged_grid(symbol):
 
     total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
 
-    # 1. Combined Basket Take Profit Check: If both trades are open and net profit >= +$250
+    # 1. Combined Basket Take Profit Check: If both trades are open and net profit >= +BASKET_TP_USD
     if len(positions) > 1 and total_pnl >= BASKET_TP_USD:
         close_all_grid_positions(symbol, f"🎯 Combined Basket TP Reached: +${total_pnl:.2f} >= +${BASKET_TP_USD:.2f}")
         return False
@@ -421,12 +432,13 @@ def manage_hedged_grid(symbol):
             
         if l1_tp_hit:
             close_grid_position(symbol, pos_l1)
-            logger.info(f"🎯 First Trade ({initial_dir}) Take Profit hit at 500 points from anchor {anchor:.2f}!")
+            logger.info(f"🎯 First Trade ({initial_dir}) Take Profit hit at +{FIRST_TRADE_TP_POINTS} points from anchor {anchor:.2f}!")
             sync_grid_state(symbol)
             return len(get_active_grid_positions(symbol)) > 0
 
     # 3. Trigger 2nd Recovery Hedge (Level 2) at 100 points against first trade
-    if pos_l2 is None and (2 not in grid_state["opened_levels"]):
+    # Guard: Must NOT be currently open AND must not have already triggered for this cycle!
+    if pos_l2 is None and not grid_state.get("hedge_triggered", False) and (2 not in grid_state["opened_levels"]):
         hedge_trigger_dist = HEDGE_TRIGGER_POINTS * point
         if initial_dir == "BUY":
             # If price drops 100 points below first trade anchor -> Open SELL hedge
@@ -445,33 +457,38 @@ def manage_hedged_grid(symbol):
                 )
                 place_grid_level(symbol, "BUY", level=2)
 
-    # 4. Close the Hedged Trade when price reaches 500 points from the first trade
+    # 4. Close the Hedged Trade when it gains HEDGE_EXIT_POINTS (500 pts) from ITS OWN entry price
     if pos_l2 is None:
         # Check if it was just opened
         positions_now = get_active_grid_positions(symbol)
         for p in positions_now:
-            if p.comment and "BB_Grid_L2" in p.comment or (pos_l1 and p.ticket != pos_l1.ticket):
+            if (p.comment and "BB_Grid_L2" in p.comment) or (pos_l1 and p.ticket != pos_l1.ticket):
                 pos_l2 = p
+                break
                 
     if pos_l2 is not None:
         hedge_exit_dist = HEDGE_EXIT_POINTS * point
         hedge_exit_hit = False
+        hedge_open_price = pos_l2.price_open
         
-        if initial_dir == "BUY":
-            # First trade was BUY at anchor; hedge is SELL.
-            # Close hedge when price drops to 500 points below first trade anchor
-            if tick.bid <= anchor - hedge_exit_dist:
+        if pos_l2.type == mt5.POSITION_TYPE_SELL:
+            # SELL hedge makes profit when price drops below its entry price
+            if tick.bid <= hedge_open_price - hedge_exit_dist:
                 hedge_exit_hit = True
-        elif initial_dir == "SELL":
-            # First trade was SELL at anchor; hedge is BUY.
-            # Close hedge when price rises to 500 points above first trade anchor
-            if tick.ask >= anchor + hedge_exit_dist:
+        elif pos_l2.type == mt5.POSITION_TYPE_BUY:
+            # BUY hedge makes profit when price rises above its entry price
+            if tick.ask >= hedge_open_price + hedge_exit_dist:
                 hedge_exit_hit = True
                 
         if hedge_exit_hit:
+            exit_price = tick.bid if pos_l2.type == mt5.POSITION_TYPE_SELL else tick.ask
             close_grid_position(symbol, pos_l2)
             grid_state["opened_levels"].discard(2)
-            logger.info(f"🎯 Hedged Trade closed at 500 points from first trade (Anchor: {anchor:.2f})! Profit secured.")
+            grid_state["hedge_triggered"] = True  # Keep True so it does NOT loop and re-enter!
+            logger.info(
+                f"🎯 Hedged Trade #{pos_l2.ticket} closed at +{HEDGE_EXIT_POINTS} pts profit! "
+                f"(Entry: {hedge_open_price:.2f} -> Exit: {exit_price:.2f})"
+            )
             sync_grid_state(symbol)
 
     # Periodic status log (every 10 seconds)
@@ -504,9 +521,9 @@ def run_bot():
     logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Hedged Strategy Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"First Trade Volume: {FIRST_TRADE_VOLUME} lots | TP: {FIRST_TRADE_TP_POINTS} pts")
+    logger.info(f"First Trade Volume: {FIRST_TRADE_VOLUME} lots | TP: +{FIRST_TRADE_TP_POINTS} pts")
     logger.info(f"2nd Recovery Hedge: {HEDGE_VOLUME} lots at {HEDGE_TRIGGER_POINTS} pts against first trade")
-    logger.info(f"Hedge Exit: Closes at {HEDGE_EXIT_POINTS} pts from first trade")
+    logger.info(f"Hedge Exit: Closes at +{HEDGE_EXIT_POINTS} pts from hedge entry price")
     logger.info(f"Combined Basket TP: +${BASKET_TP_USD:.2f}")
     logger.info(f"Stop Loss: REMOVED ENTIRELY (No SL)")
     logger.info("=" * 60)
