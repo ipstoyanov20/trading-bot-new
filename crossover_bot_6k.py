@@ -10,11 +10,17 @@ import config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- User Configurable Settings ---
+# --- Account & Challenge Parameters ($6,000 Stellar 2-Step) ---
+ACCOUNT_SIZE = 6000.0               # Funded Account Size ($6,000)
+PHASE_1_TARGET_USD = 480.0          # Phase 1 Target: 8% (+$480.00)
+MAX_DAILY_LOSS_USD = 150.0          # Daily Loss Killswitch: 2.5% (-$150.00, safety buffer under 5% / $300 limit)
+MAX_TOTAL_LOSS_USD = 600.0          # Max Total Loss: 10% (-$600.00)
+
+# --- Trading Strategy & Symbol Settings ---
 SYMBOL = "XAUUSD"                   # Gold Bot
 TIMEFRAME = mt5.TIMEFRAME_M5        # M5 Timeframe
 SLEEP_INTERVAL = 1                  # 1 second loop interval
-COOLDOWN_SECONDS = 60               # Cooldown between completed grids
+COOLDOWN_SECONDS = 60               # Cooldown between completed trades
 MAGIC_NUMBER = 60020                # Unique identifier for this bot's orders
 DEVIATION = 20                      # Maximum price slippage in points
 
@@ -25,32 +31,24 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Hedged Strategy Parameters (No Stop Loss) ---
-FIRST_TRADE_VOLUME = 0.15           # First trade volume = 0.15 lots ($1.00 move on Gold = $15.00)
-HEDGE_VOLUME = 0.15                 # Recovery hedge volume = 0.15 lots (fits margin cleanly in $6K account)
+# --- Single Trade Risk & Profit Parameters ---
+TRADE_VOLUME = 0.25                 # Volume: 0.25 lots ($1.00 move in Gold = $25.00)
+SL_POINTS = 120                     # Hard Stop Loss: 120 points ($1.20 move = -$30.00 max risk per trade)
+MAX_LOSS_USD = 30.0                 # Max allowed dollar loss floor per trade (-$30.00 / 0.5% risk)
 
-HEDGE_TRIGGER_POINTS = 100          # Open 2nd recovery hedge at 100 points ($1.00) adverse movement from first trade
-HEDGE_EXIT_POINTS = 500             # Close hedged trade when it gains 500 points ($5.00) from ITS OWN entry price
-FIRST_TRADE_TP_POINTS = 500         # First trade Take Profit at 500 points ($5.00) in its favor
-BASKET_TP_USD = 30.0                # Combined basket Take Profit when both trades are open (+$30.00 net)
-
-# NOTE: All Stop Loss exits are REMOVED entirely as requested.
+# --- 2-Tier Smart Profit Management (1:2.5 Risk-to-Reward) ---
+BE_ACTIVATION_USD = 20.0            # Profit threshold to activate Break-Even floor (+$20.00)
+MIN_LOCKED_PROFIT_USD = 5.0         # Guaranteed profit floor once +$20.00 is reached (+$5.00)
+TRAIL_ACTIVATION_USD = 60.0         # Minimum profit in USD to activate peak trailing (+~$2.40 move)
+TRAIL_PULLBACK_USD = 10.0           # Pullback drop in USD from peak profit to trigger exit ($10.00)
 
 # --- Bot Runtime State ---
-last_close_time = 0                 # Timestamp of last closed grid basket
+last_close_time = 0                 # Timestamp of last closed trade
 last_processed_candle_time = None   # Timestamp of last processed candle shift 1
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
-
-grid_state = {
-    "active": False,
-    "initial_direction": None,      # 'BUY' or 'SELL'
-    "anchor_price": 0.0,            # Entry price of first trade
-    "hedge_entry_price": 0.0,       # Entry price of recovery hedge trade
-    "hedge_triggered": False,       # Flag to prevent infinite re-opening loops
-    "opened_levels": set(),         # Set of active level numbers (e.g. {1, 2})
-}
+trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
 
 def get_filling_type(symbol):
     """
@@ -144,7 +142,7 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
         
     return None, candle_time
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Grid"):
+def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Single"):
     """
     Places an order on MT5 with filling mode fallback and returns (result, fill_price).
     """
@@ -200,7 +198,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
             action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
-            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | TP: {tp} | Filling: {mode}")
+            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | Hard SL: {sl} | Filling: {mode}")
             return res, price
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue
@@ -211,9 +209,10 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
     logger.error(f"Failed to place order ({comment}): {err} | Request: {request}")
     return None, 0.0
 
-def get_active_grid_positions(symbol):
+def get_active_positions(symbol):
     """
     Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically.
+    Strictly 1 position allowed at any time.
     """
     positions = mt5.positions_get(symbol=symbol)
     if not positions:
@@ -222,7 +221,7 @@ def get_active_grid_positions(symbol):
     bot_positions.sort(key=lambda p: p.time)
     return bot_positions
 
-def close_grid_position(symbol, position):
+def close_position(symbol, position):
     """Closes a single MT5 position safely."""
     tick = mt5.symbol_info_tick(symbol)
     if not tick:
@@ -267,245 +266,144 @@ def close_grid_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
-def close_all_grid_positions(symbol, reason="Grid Close"):
-    """Closes all open positions belonging to this bot."""
-    global last_close_time
-    positions = get_active_grid_positions(symbol)
-    if not positions:
-        return True
+def get_daily_realized_pnl(magic=MAGIC_NUMBER):
+    """
+    Calculates total closed PnL today (since 00:00 server/local time) for this bot's magic number.
+    """
+    now = datetime.now()
+    today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    deals = mt5.history_deals_get(today_midnight, now)
+    if not deals:
+        return 0.0
         
-    logger.info(f"Closing all {len(positions)} grid positions: {reason}")
-    all_closed = True
-    for p in positions:
-        if not close_grid_position(symbol, p):
-            all_closed = False
+    daily_pnl = 0.0
+    for d in deals:
+        if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT:
+            daily_pnl += (d.profit + d.swap + getattr(d, 'commission', 0.0))
             
-    last_close_time = time.time()
-    return all_closed
+    return daily_pnl
 
-def sync_grid_state(symbol):
+def get_total_closed_pnl(magic=MAGIC_NUMBER):
     """
-    Synchronizes grid_state with live MT5 positions.
-    Handles bot restart gracefully without duplicating positions.
+    Calculates total cumulative closed PnL for Phase 1 target tracking ($480.00 goal).
     """
-    positions = get_active_grid_positions(symbol)
-    if not positions:
-        if grid_state["active"]:
-            logger.info("All grid positions are closed. Resetting grid state.")
-            grid_state["active"] = False
-            grid_state["initial_direction"] = None
-            grid_state["anchor_price"] = 0.0
-            grid_state["hedge_entry_price"] = 0.0
-            grid_state["hedge_triggered"] = False
-            grid_state["opened_levels"].clear()
-        return positions
+    start_date = datetime(2026, 1, 1)
+    now = datetime.now()
+    deals = mt5.history_deals_get(start_date, now)
+    if not deals:
+        return 0.0
         
-    grid_state["active"] = True
-    
-    # Reconstruct opened levels from comments or chronological order
-    opened_levels = set()
-    for idx, p in enumerate(positions):
-        lvl = None
-        if p.comment and "BB_Grid_L" in p.comment:
-            try:
-                part = p.comment.split("BB_Grid_L")[1]
-                lvl = int(part[0])
-            except (IndexError, ValueError):
-                lvl = None
-        if lvl is None:
-            lvl = idx + 1
-        opened_levels.add(lvl)
-        
-    grid_state["opened_levels"] = opened_levels
-    
-    # If Level 2 is active, ensure hedge_triggered is True
-    if 2 in opened_levels:
-        grid_state["hedge_triggered"] = True
-    
-    # Level 1 defines initial direction and anchor price
-    pos_l1 = None
-    for p in positions:
-        if p.comment and "BB_Grid_L1" in p.comment:
-            pos_l1 = p
-            break
-    if pos_l1 is None and len(positions) > 0:
-        pos_l1 = positions[0]
-        
-    if pos_l1:
-        initial_dir = "BUY" if pos_l1.type == mt5.POSITION_TYPE_BUY else "SELL"
-        grid_state["initial_direction"] = initial_dir
-        if grid_state["anchor_price"] == 0.0:
-            grid_state["anchor_price"] = pos_l1.price_open
+    total_pnl = 0.0
+    for d in deals:
+        if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT:
+            total_pnl += (d.profit + d.swap + getattr(d, 'commission', 0.0))
             
-    return positions
+    return total_pnl
 
-def place_grid_level(symbol, direction, level):
+def open_single_trade(symbol, direction):
     """
-    Places an order for Level 1 (first trade) or Level 2 (recovery hedge).
+    Opens a single, disciplined trade with strict hard Stop Loss (-$30.00 max risk).
+    Guarantees that strictly 1 position is placed.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_Grid_L{level}_{direction}"
-    volume = FIRST_TRADE_VOLUME if level == 1 else HEDGE_VOLUME
+    comment = f"BB_{direction}_Single"
     
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
-        volume=volume,
-        tp_points=0,
-        sl_points=0,
+        volume=TRADE_VOLUME,
+        tp_points=0,                 # Managed via dynamic 2-Tier Trailing Profit
+        sl_points=SL_POINTS,         # Hard broker Stop Loss: 200 points (-$30.00)
         comment=comment
     )
     
     if res:
-        grid_state["active"] = True
-        grid_state["opened_levels"].add(level)
-        if level == 1:
-            grid_state["initial_direction"] = direction
-            grid_state["anchor_price"] = fill_price
-            grid_state["hedge_triggered"] = False
-            logger.info(f"🎯 First Trade Started: Level 1 {direction} at {fill_price:.2f} | Vol: {volume} (Anchor: {fill_price:.2f})")
-        else:
-            grid_state["hedge_entry_price"] = fill_price
-            grid_state["hedge_triggered"] = True
-            logger.info(f"🛡️ 2nd Recovery Hedge Placed: Level 2 {direction} at {fill_price:.2f} | Vol: {volume} (Hedge Entry: {fill_price:.2f})")
+        ticket = getattr(res, 'order', None)
+        logger.info(
+            f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+            f"Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | "
+            f"BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (at +${BE_ACTIVATION_USD:.2f}) | "
+            f"Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f} drop)"
+        )
         return res, fill_price
     return None, 0.0
 
-def manage_hedged_grid(symbol):
+def manage_active_trade(symbol):
     """
-    Manages active trades for Hedged Strategy:
-    1. Triggers 2nd recovery hedge (HEDGE_VOLUME) once when price moves 100 points against first trade.
-    2. Closes the hedged trade when it gains 500 points from ITS OWN entry price.
-    3. Closes first trade when price hits 500 points in its favor (Take Profit).
-    4. Closes all trades together if combined basket net profit >= +$30.00.
-    5. Stop Loss is REMOVED ENTIRELY (no SL exits).
-    Returns True if positions remain open, False otherwise.
+    Manages the active single trade:
+    1. Hard downside protection: watchdog exit at -$30.00 max loss.
+    2. Tier 1 Break-Even floor: locks in +$2.00 minimum profit once +$10.00 is touched.
+    3. Tier 2 Peak Trailing: once +$30.00 is touched, tracks peak profit and closes on $5.00 pullback.
+    Returns True if a trade is currently active, False if no trade is open.
     """
-    global last_status_log_time
+    global last_close_time, last_status_log_time, trade_peak_profit
     
-    positions = sync_grid_state(symbol)
+    positions = get_active_positions(symbol)
     if not positions:
+        trade_peak_profit.clear()
         return False
         
-    symbol_info = mt5.symbol_info(symbol)
-    if not symbol_info:
-        return True
-        
-    tick = mt5.symbol_info_tick(symbol)
-    if not tick:
-        return True
-        
-    point = getattr(symbol_info, 'point', 0.01)
-    anchor = grid_state["anchor_price"]
-    initial_dir = grid_state["initial_direction"]
+    position = positions[0]
+    ticket = position.ticket
+    total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
     
-    # Identify Level 1 (first trade) and Level 2 (hedge trade)
-    pos_l1 = None
-    pos_l2 = None
-    for p in positions:
-        if p.comment and "BB_Grid_L2" in p.comment:
-            pos_l2 = p
-        elif p.comment and "BB_Grid_L1" in p.comment:
-            pos_l1 = p
-            
-    # Chronological fallback
-    if pos_l1 is None and len(positions) > 0:
-        pos_l1 = positions[0]
-    if pos_l2 is None and len(positions) > 1:
-        pos_l2 = positions[1]
+    # Track peak profit for this ticket
+    if ticket not in trade_peak_profit:
+        trade_peak_profit[ticket] = total_pnl
+    else:
+        if total_pnl > trade_peak_profit[ticket]:
+            old_peak = trade_peak_profit[ticket]
+            trade_peak_profit[ticket] = total_pnl
+            if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
+                logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f}")
+            elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD:
+                logger.info(f"🛡️ Position #{ticket} crossed +${BE_ACTIVATION_USD:.2f}! Break-Even floor locked at +${MIN_LOCKED_PROFIT_USD:.2f}.")
 
-    total_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
+    peak = trade_peak_profit[ticket]
 
-    # 1. Combined Basket Take Profit Check: If both trades are open and net profit >= +BASKET_TP_USD
-    if len(positions) > 1 and total_pnl >= BASKET_TP_USD:
-        close_all_grid_positions(symbol, f"🎯 Combined Basket TP Reached: +${total_pnl:.2f} >= +${BASKET_TP_USD:.2f}")
-        return False
+    # 1. Hard Downside Watchdog (-$30.00 max loss check)
+    if total_pnl <= -MAX_LOSS_USD:
+        logger.info(f"🛑 Stop Loss Watchdog Triggered (P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing position #{ticket}...")
+        if close_position(symbol, position):
+            trade_peak_profit.pop(ticket, None)
+            last_close_time = time.time()
+            return False
 
-    # 2. First Trade (Level 1) Take Profit at 500 points in its favor (when hedge is not open)
-    if pos_l1 is not None and pos_l2 is None:
-        l1_tp_dist = FIRST_TRADE_TP_POINTS * point
-        l1_tp_hit = False
-        if initial_dir == "BUY" and tick.bid >= anchor + l1_tp_dist:
-            l1_tp_hit = True
-        elif initial_dir == "SELL" and tick.ask <= anchor - l1_tp_dist:
-            l1_tp_hit = True
-            
-        if l1_tp_hit:
-            close_grid_position(symbol, pos_l1)
-            logger.info(f"🎯 First Trade ({initial_dir}) Take Profit hit at +{FIRST_TRADE_TP_POINTS} points from anchor {anchor:.2f}!")
-            sync_grid_state(symbol)
-            return len(get_active_grid_positions(symbol)) > 0
+    # 2. Profit Exit Management
+    if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
+        # Tier 1: Break-Even Floor Protection
+        if total_pnl <= MIN_LOCKED_PROFIT_USD:
+            logger.info(f"🛡️ Break-Even Floor Triggered! Peak was +${peak:.2f}, dropped to +${total_pnl:.2f}. Securing +${total_pnl:.2f} profit...")
+            if close_position(symbol, position):
+                trade_peak_profit.pop(ticket, None)
+                last_close_time = time.time()
+                return False
 
-    # 3. Trigger 2nd Recovery Hedge (Level 2) at 100 points against first trade
-    # Guard: Must NOT be currently open AND must not have already triggered for this cycle!
-    if pos_l2 is None and not grid_state.get("hedge_triggered", False) and (2 not in grid_state["opened_levels"]):
-        hedge_trigger_dist = HEDGE_TRIGGER_POINTS * point
-        if initial_dir == "BUY":
-            # If price drops 100 points below first trade anchor -> Open SELL hedge
-            if tick.bid <= anchor - hedge_trigger_dist:
-                logger.info(
-                    f"🛡️ Triggering 2nd Recovery Hedge (SELL {HEDGE_VOLUME} lots): "
-                    f"Price {tick.bid:.2f} <= {anchor - hedge_trigger_dist:.2f} (100 pts below {anchor:.2f})"
-                )
-                place_grid_level(symbol, "SELL", level=2)
-        elif initial_dir == "SELL":
-            # If price rises 100 points above first trade anchor -> Open BUY hedge
-            if tick.ask >= anchor + hedge_trigger_dist:
-                logger.info(
-                    f"🛡️ Triggering 2nd Recovery Hedge (BUY {HEDGE_VOLUME} lots): "
-                    f"Price {tick.ask:.2f} >= {anchor + hedge_trigger_dist:.2f} (100 pts above {anchor:.2f})"
-                )
-                place_grid_level(symbol, "BUY", level=2)
-
-    # 4. Close the Hedged Trade when it gains HEDGE_EXIT_POINTS (500 pts) from ITS OWN entry price
-    if pos_l2 is None:
-        # Check if it was just opened
-        positions_now = get_active_grid_positions(symbol)
-        for p in positions_now:
-            if (p.comment and "BB_Grid_L2" in p.comment) or (pos_l1 and p.ticket != pos_l1.ticket):
-                pos_l2 = p
-                break
-                
-    if pos_l2 is not None:
-        hedge_exit_dist = HEDGE_EXIT_POINTS * point
-        hedge_exit_hit = False
-        hedge_open_price = pos_l2.price_open
-        
-        if pos_l2.type == mt5.POSITION_TYPE_SELL:
-            # SELL hedge makes profit when price drops below its entry price
-            if tick.bid <= hedge_open_price - hedge_exit_dist:
-                hedge_exit_hit = True
-        elif pos_l2.type == mt5.POSITION_TYPE_BUY:
-            # BUY hedge makes profit when price rises above its entry price
-            if tick.ask >= hedge_open_price + hedge_exit_dist:
-                hedge_exit_hit = True
-                
-        if hedge_exit_hit:
-            exit_price = tick.bid if pos_l2.type == mt5.POSITION_TYPE_SELL else tick.ask
-            close_grid_position(symbol, pos_l2)
-            grid_state["opened_levels"].discard(2)
-            grid_state["hedge_triggered"] = True  # Keep True so it does NOT loop and re-enter!
-            logger.info(
-                f"🎯 Hedged Trade #{pos_l2.ticket} closed at +{HEDGE_EXIT_POINTS} pts profit! "
-                f"(Entry: {hedge_open_price:.2f} -> Exit: {exit_price:.2f})"
-            )
-            sync_grid_state(symbol)
+    elif peak >= TRAIL_ACTIVATION_USD:
+        # Tier 2: Peak Trailing Exit
+        drop_from_peak = peak - total_pnl
+        if drop_from_peak >= TRAIL_PULLBACK_USD or total_pnl <= MIN_LOCKED_PROFIT_USD:
+            logger.info(f"💰 Trailing Profit Exit Triggered! Peak: +${peak:.2f}, Current: +${total_pnl:.2f} (Drop: ${drop_from_peak:.2f}). Securing profit...")
+            if close_position(symbol, position):
+                trade_peak_profit.pop(ticket, None)
+                last_close_time = time.time()
+                return False
 
     # Periodic status log (every 10 seconds)
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
-        pos_details = []
-        for p in positions:
-            d = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
-            pos_details.append(f"#{p.ticket} ({d} {p.volume}l @ {p.price_open:.2f} PnL:${p.profit:.2f})")
-        logger.info(f"📊 Active Grid ({len(positions)} trades): {' | '.join(pos_details)} | Basket Net: ${total_pnl:.2f} | Anchor: {anchor:.2f}")
-
-    # NOTE: Stop Loss is REMOVED ENTIRELY — no stop loss exits.
-    return len(get_active_grid_positions(symbol)) > 0
+        trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+        sl_str = f"SL: {position.sl:.2f}" if position.sl > 0 else f"Watchdog SL: -${MAX_LOSS_USD:.2f}"
+        logger.info(
+            f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | {sl_str}) | "
+            f"P&L: ${total_pnl:.2f} | Peak: +${peak:.2f}"
+        )
+        
+    return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Hedged Strategy Bot (No Stop Loss)."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single-Trade Bot."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -517,37 +415,70 @@ def run_bot():
         logger.error(f"Symbol {SYMBOL} not found.")
         return
         
-    logger.info("=" * 60)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Hedged Strategy Bot")
+    logger.info("=" * 65)
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single-Trade Disciplined Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Authorized Order Type: {AUTHORIZED_ORDER_TYPE}")
-    logger.info(f"First Trade Volume: {FIRST_TRADE_VOLUME} lots | TP: +{FIRST_TRADE_TP_POINTS} pts")
-    logger.info(f"2nd Recovery Hedge: {HEDGE_VOLUME} lots at {HEDGE_TRIGGER_POINTS} pts against first trade")
-    logger.info(f"Hedge Exit: Closes at +{HEDGE_EXIT_POINTS} pts from hedge entry price")
-    logger.info(f"Combined Basket TP: +${BASKET_TP_USD:.2f}")
-    logger.info(f"Stop Loss: REMOVED ENTIRELY (No SL)")
-    logger.info("=" * 60)
+    logger.info(f"Execution: STRICTLY 1 trade at a time (No hedging, zero orphan risk)")
+    logger.info(f"Trade Volume: {TRADE_VOLUME} lots ($1.00 move on Gold = $25.00)")
+    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} pts / $1.20 move = 0.5% risk)")
+    logger.info(f"Tier 1 BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} locked once profit touches +${BE_ACTIVATION_USD:.2f}")
+    logger.info(f"Tier 2 Trailing: Active at +${TRAIL_ACTIVATION_USD:.2f}+ (Exits on -${TRAIL_PULLBACK_USD:.2f} drop from peak)")
+    logger.info(f"Daily Loss Killswitch: -${MAX_DAILY_LOSS_USD:.2f} (2.5% max daily loss buffer)")
+    logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $6,000 account)")
+    logger.info("=" * 65)
     
     try:
         while True:
-            # 1. Manage Open Hedged Grid (if any)
-            has_active_grid = manage_hedged_grid(SYMBOL)
-            if has_active_grid:
+            # 1. Check Phase 1 Target Achievement Tracker
+            cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
+            if cumulative_closed_pnl >= PHASE_1_TARGET_USD:
+                logger.info("=" * 65)
+                logger.info(f"🎉🎉 PHASE 1 TARGET ACHIEVED! 🎉🎉")
+                logger.info(f"Total Cumulative Profit: +${cumulative_closed_pnl:.2f} >= +${PHASE_1_TARGET_USD:.2f} (+8%)")
+                logger.info("Trading halted to preserve Phase 1 pass status. Submit your account to FundedNext!")
+                logger.info("=" * 65)
+                # Close any lingering positions to protect account
+                positions = get_active_positions(SYMBOL)
+                for p in positions:
+                    close_position(SYMBOL, p)
+                time.sleep(60)
+                continue
+
+            # 2. Check Daily Loss Limit Killswitch (50% safety buffer under 5% limit)
+            daily_realized_pnl = get_daily_realized_pnl(MAGIC_NUMBER)
+            active_positions = get_active_positions(SYMBOL)
+            floating_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in active_positions)
+            total_today_pnl = daily_realized_pnl + floating_pnl
+            
+            if total_today_pnl <= -MAX_DAILY_LOSS_USD:
+                logger.warning(
+                    f"🛑 Daily Loss Killswitch Activated! Today's PnL: ${total_today_pnl:.2f} <= -${MAX_DAILY_LOSS_USD:.2f}. "
+                    f"Protecting account against the 5% daily limit ($300). Halting trades for today."
+                )
+                if active_positions:
+                    for p in active_positions:
+                        close_position(SYMBOL, p)
+                time.sleep(60)
+                continue
+
+            # 3. Manage Active Single Trade
+            has_active_trade = manage_active_trade(SYMBOL)
+            if has_active_trade:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 2. Check Cooldown after Grid Close
+            # 4. Check Cooldown after Trade Close
             time_since_last_close = time.time() - last_close_time
             if time_since_last_close < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
                 continue
                 
-            # 3. Check Bollinger Bands Entry Signal on Candle Shift 1
+            # 5. Check Bollinger Bands Entry Signal on Candle Shift 1
             signal, candle_time = check_bb_entry_signal(SYMBOL, TIMEFRAME)
             
             if signal and (last_processed_candle_time != candle_time):
-                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing Level 1 ({FIRST_TRADE_VOLUME} lots)...")
-                res, fill_price = place_grid_level(SYMBOL, signal, level=1)
+                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
+                res, fill_price = open_single_trade(SYMBOL, signal)
                 if res:
                     last_processed_candle_time = candle_time
                     
