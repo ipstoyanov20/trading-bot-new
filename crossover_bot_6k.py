@@ -32,15 +32,15 @@ BB_SHIFT = 0                        # Shift 0
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Single Trade Risk & Profit Parameters ---
-TRADE_VOLUME = 0.25                 # Volume: 0.25 lots ($1.00 move in Gold = $25.00)
-SL_POINTS = 120                     # Hard Stop Loss: 120 points ($1.20 move = -$30.00 max risk per trade)
-MAX_LOSS_USD = 30.0                 # Max allowed dollar loss floor per trade (-$30.00 / 0.5% risk)
+TRADE_VOLUME = 0.01                 # Volume: 0.01 lots ($1.00 move in Gold = $1.00)
+SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
+MAX_LOSS_USD = 0.0                  # Dollar loss floor: Disabled (Patient trade execution)
 
-# --- 2-Tier Smart Profit Management (1:2.5 Risk-to-Reward) ---
-BE_ACTIVATION_USD = 20.0            # Profit threshold to activate Break-Even floor (+$20.00)
-MIN_LOCKED_PROFIT_USD = 5.0         # Guaranteed profit floor once +$20.00 is reached (+$5.00)
-TRAIL_ACTIVATION_USD = 60.0         # Minimum profit in USD to activate peak trailing (+~$2.40 move)
-TRAIL_PULLBACK_USD = 10.0           # Pullback drop in USD from peak profit to trigger exit ($10.00)
+# --- 2-Tier Smart Profit Management (Scaled for 0.01 lots) ---
+BE_ACTIVATION_USD = 2.50            # Profit threshold to activate Break-Even floor (+$2.50 / $2.50 move)
+MIN_LOCKED_PROFIT_USD = 0.50        # Guaranteed profit floor once +$2.50 is reached (+$0.50)
+TRAIL_ACTIVATION_USD = 5.00         # Minimum profit in USD to activate peak trailing (+$5.00 / $5.00 move)
+TRAIL_PULLBACK_USD = 1.00           # Pullback drop in USD from peak profit to trigger exit ($1.00)
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
@@ -313,15 +313,16 @@ def open_single_trade(symbol, direction):
         order_type=order_type,
         volume=TRADE_VOLUME,
         tp_points=0,                 # Managed via dynamic 2-Tier Trailing Profit
-        sl_points=SL_POINTS,         # Hard broker Stop Loss: 200 points (-$30.00)
+        sl_points=SL_POINTS,         # 0 = Disabled
         comment=comment
     )
     
     if res:
         ticket = getattr(res, 'order', None)
+        sl_text = f"Hard SL: {SL_POINTS} pts" if SL_POINTS > 0 else "Stop Loss: DISABLED"
         logger.info(
             f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"Hard SL: {SL_POINTS} pts (-${MAX_LOSS_USD:.2f} max risk) | "
+            f"{sl_text} | "
             f"BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (at +${BE_ACTIVATION_USD:.2f}) | "
             f"Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f} drop)"
         )
@@ -331,9 +332,9 @@ def open_single_trade(symbol, direction):
 def manage_active_trade(symbol):
     """
     Manages the active single trade:
-    1. Hard downside protection: watchdog exit at -$30.00 max loss.
-    2. Tier 1 Break-Even floor: locks in +$2.00 minimum profit once +$10.00 is touched.
-    3. Tier 2 Peak Trailing: once +$30.00 is touched, tracks peak profit and closes on $5.00 pullback.
+    1. Downside watchdog (if configured): closes if loss exceeds MAX_LOSS_USD.
+    2. Tier 1 Break-Even floor: locks in +$0.50 minimum profit once +$2.50 is touched.
+    3. Tier 2 Peak Trailing: once +$5.00 is touched, tracks peak profit and closes on $1.00 pullback.
     Returns True if a trade is currently active, False if no trade is open.
     """
     global last_close_time, last_status_log_time, trade_peak_profit
@@ -354,15 +355,15 @@ def manage_active_trade(symbol):
         if total_pnl > trade_peak_profit[ticket]:
             old_peak = trade_peak_profit[ticket]
             trade_peak_profit[ticket] = total_pnl
-            if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 2.0):
+            if total_pnl >= TRAIL_ACTIVATION_USD and (total_pnl - old_peak >= 0.50):
                 logger.info(f"🔥 New Peak Profit for #{ticket}: +${total_pnl:.2f}")
             elif total_pnl >= BE_ACTIVATION_USD and old_peak < BE_ACTIVATION_USD:
                 logger.info(f"🛡️ Position #{ticket} crossed +${BE_ACTIVATION_USD:.2f}! Break-Even floor locked at +${MIN_LOCKED_PROFIT_USD:.2f}.")
 
     peak = trade_peak_profit[ticket]
 
-    # 1. Hard Downside Watchdog (-$30.00 max loss check)
-    if total_pnl <= -MAX_LOSS_USD:
+    # 1. Hard Downside Watchdog (only if MAX_LOSS_USD > 0)
+    if MAX_LOSS_USD > 0 and total_pnl <= -MAX_LOSS_USD:
         logger.info(f"🛑 Stop Loss Watchdog Triggered (P&L: ${total_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing position #{ticket}...")
         if close_position(symbol, position):
             trade_peak_profit.pop(ticket, None)
@@ -394,7 +395,7 @@ def manage_active_trade(symbol):
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        sl_str = f"SL: {position.sl:.2f}" if position.sl > 0 else f"Watchdog SL: -${MAX_LOSS_USD:.2f}"
+        sl_str = f"SL: {position.sl:.2f}" if position.sl > 0 else "SL: DISABLED"
         logger.info(
             f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | {sl_str}) | "
             f"P&L: ${total_pnl:.2f} | Peak: +${peak:.2f}"
@@ -419,11 +420,11 @@ def run_bot():
     logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single-Trade Disciplined Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Execution: STRICTLY 1 trade at a time (No hedging, zero orphan risk)")
-    logger.info(f"Trade Volume: {TRADE_VOLUME} lots ($1.00 move on Gold = $25.00)")
-    logger.info(f"Hard Stop Loss: -${MAX_LOSS_USD:.2f} ({SL_POINTS} pts / $1.20 move = 0.5% risk)")
+    logger.info(f"Trade Volume: {TRADE_VOLUME} lots ($1.00 move on Gold = $1.00)")
+    logger.info(f"Stop Loss: DISABLED (Patient trade execution)")
     logger.info(f"Tier 1 BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} locked once profit touches +${BE_ACTIVATION_USD:.2f}")
     logger.info(f"Tier 2 Trailing: Active at +${TRAIL_ACTIVATION_USD:.2f}+ (Exits on -${TRAIL_PULLBACK_USD:.2f} drop from peak)")
-    logger.info(f"Daily Loss Killswitch: -${MAX_DAILY_LOSS_USD:.2f} (2.5% max daily loss buffer)")
+    logger.info(f"Daily Loss Killswitch: -${MAX_DAILY_LOSS_USD:.2f} (2.5% max daily account safety buffer)")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $6,000 account)")
     logger.info("=" * 65)
     
