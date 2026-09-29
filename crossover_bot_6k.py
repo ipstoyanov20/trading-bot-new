@@ -31,14 +31,19 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Single Trade Risk & Profit Parameters ---
-TRADE_VOLUME = 0.01                 # Volume: 0.01 lots ($1.00 move in Gold = $1.00)
+# --- Trade Risk & Profit Parameters ---
+TRADE_VOLUME = 0.01                 # Volume for original trade: 0.01 lots ($1.00 move in Gold = $1.00)
 SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
 MAX_LOSS_USD = 0.0                  # Dollar loss floor: Disabled (Patient trade execution)
 
-# --- 2-Tier Smart Profit Management (Scaled for 0.01 lots) ---
+# --- Hedge Parameters ---
+HEDGE_TRIGGER_LOSS_USD = -6.00      # Floating loss on original 0.01 lot trade to trigger hedge (-$6.00 or lower)
+HEDGE_VOLUME = 0.03                 # Hedge volume: 0.03 lots in opposite direction
+HEDGE_TARGET_PROFIT_USD = 2.00      # Target combined net profit to close both trades (offsets loss + reaches positive profit)
+
+# --- 2-Tier Smart Profit Management (for Single Original Trade) ---
 BE_ACTIVATION_USD = 2.50            # Profit threshold to activate Break-Even floor (+$2.50 / $2.50 move)
-MIN_LOCKED_PROFIT_USD = 0.50        # Guaranteed profit floor once +$2.50 is reached (+$0.50)
+MIN_LOCKED_PROFIT_USD = 2.50       # Guaranteed profit floor once +$2.50 is reached (+$0.50)
 TRAIL_ACTIVATION_USD = 5.00         # Minimum profit in USD to activate peak trailing (+$5.00 / $5.00 move)
 TRAIL_PULLBACK_USD = 1.00           # Pullback drop in USD from peak profit to trigger exit ($1.00)
 
@@ -212,7 +217,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
 def get_active_positions(symbol):
     """
     Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically.
-    Strictly 1 position allowed at any time.
+    Position 0 is the original trade; Position 1 (if active) is the hedge trade.
     """
     positions = mt5.positions_get(symbol=symbol)
     if not positions:
@@ -302,11 +307,10 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
 
 def open_single_trade(symbol, direction):
     """
-    Opens a single, disciplined trade with strict hard Stop Loss (-$30.00 max risk).
-    Guarantees that strictly 1 position is placed.
+    Opens an initial 0.01 lot trade based on Bollinger Bands entry signal.
     """
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_Single"
+    comment = f"BB_{direction}_Orig"
     
     res, fill_price = place_order_safe(
         symbol=symbol,
@@ -321,21 +325,64 @@ def open_single_trade(symbol, direction):
         ticket = getattr(res, 'order', None)
         sl_text = f"Hard SL: {SL_POINTS} pts" if SL_POINTS > 0 else "Stop Loss: DISABLED"
         logger.info(
-            f"🚀 Single Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"{sl_text} | "
+            f"🚀 Original Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+            f"{sl_text} | Hedge Trigger: <= ${HEDGE_TRIGGER_LOSS_USD:.2f} | "
             f"BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} (at +${BE_ACTIVATION_USD:.2f}) | "
             f"Trailing: +${TRAIL_ACTIVATION_USD:.2f}+ (-${TRAIL_PULLBACK_USD:.2f} drop)"
         )
         return res, fill_price
     return None, 0.0
 
+def open_hedge_trade(symbol, original_position):
+    """
+    When an original 0.01 lot trade reaches -6.00 USD or lower,
+    immediately open one hedge trade of 0.03 lots in the opposite direction.
+    """
+    orig_type = original_position.type
+    hedge_order_type = mt5.ORDER_TYPE_SELL if orig_type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    hedge_dir = "SELL" if orig_type == mt5.POSITION_TYPE_BUY else "BUY"
+    orig_dir = "BUY" if orig_type == mt5.POSITION_TYPE_BUY else "SELL"
+    comment = f"BB_{hedge_dir}_Hedge"
+    
+    orig_pnl = original_position.profit + original_position.swap + getattr(original_position, 'commission', 0.0)
+    logger.info(
+        f"🚨 HEDGE TRIGGERED! Original #{original_position.ticket} ({orig_dir} {original_position.volume} lots) "
+        f"reached ${orig_pnl:.2f} <= ${HEDGE_TRIGGER_LOSS_USD:.2f}. "
+        f"Immediately opening hedge trade: {hedge_dir} {HEDGE_VOLUME} lots..."
+    )
+    
+    for attempt in range(3):
+        res, fill_price = place_order_safe(
+            symbol=symbol,
+            order_type=hedge_order_type,
+            volume=HEDGE_VOLUME,
+            tp_points=0,
+            sl_points=0,
+            comment=comment
+        )
+        if res:
+            logger.info(
+                f"✅ Hedge Position Opened: #{getattr(res, 'order', None)} {hedge_dir} {HEDGE_VOLUME} lots @ {fill_price:.2f} | "
+                f"Now monitoring combined basket PnL to reach positive profit (>= +${HEDGE_TARGET_PROFIT_USD:.2f})"
+            )
+            return res, fill_price
+        logger.warning(f"⚠️ Hedge placement attempt {attempt + 1}/3 failed. Retrying in 0.2s...")
+        time.sleep(0.2)
+        
+    logger.error("❌ Failed to place hedge trade after 3 attempts!")
+    return None, 0.0
+
 def manage_active_trade(symbol):
     """
-    Manages the active single trade:
-    1. Downside watchdog (if configured): closes if loss exceeds MAX_LOSS_USD.
-    2. Tier 1 Break-Even floor: locks in +$0.50 minimum profit once +$2.50 is touched.
-    3. Tier 2 Peak Trailing: once +$5.00 is touched, tracks peak profit and closes on $1.00 pullback.
-    Returns True if a trade is currently active, False if no trade is open.
+    Manages active trade(s):
+    1. Hedged Basket (when hedge is open, len >= 2):
+       - Monitors combined PnL of original 0.01 lot and hedge 0.03 lot trades.
+       - When the hedge trade's profit fully offsets the original loss and reaches positive profit
+         (combined PnL >= HEDGE_TARGET_PROFIT_USD), immediately closes both trades.
+    2. Single Original Trade:
+       - Watchdog check: If PnL <= HEDGE_TRIGGER_LOSS_USD (-$6.00), immediately opens 0.03 hedge trade.
+       - If profit moves favorably, applies 2-Tier profit management (BE floor at +$2.50, Trailing at +$5.00).
+    Returns True if trade(s) active, False if all trades are closed.
     """
     global last_close_time, last_status_log_time, trade_peak_profit
     
@@ -343,12 +390,64 @@ def manage_active_trade(symbol):
     if not positions:
         trade_peak_profit.clear()
         return False
-        
+
+    # --- CASE A: Hedged Basket (2 or more active positions) ---
+    if len(positions) >= 2:
+        # Sort out original trade and hedge trade
+        orig_pos = positions[0]
+        hedge_pos = positions[1]
+        for p in positions:
+            if p.comment and "Hedge" in p.comment:
+                hedge_pos = p
+            elif (p.comment and "Orig" in p.comment) or p.volume == TRADE_VOLUME:
+                orig_pos = p
+
+        orig_pnl = orig_pos.profit + orig_pos.swap + getattr(orig_pos, 'commission', 0.0)
+        hedge_pnl = hedge_pos.profit + hedge_pos.swap + getattr(hedge_pos, 'commission', 0.0)
+        combined_pnl = orig_pnl + hedge_pnl
+
+        # Check if hedge profit fully offsets original loss and reaches positive profit
+        if combined_pnl >= HEDGE_TARGET_PROFIT_USD:
+            logger.info(
+                f"🎉 HEDGE OFFSET ACHIEVED! Combined Net PnL: +${combined_pnl:.2f} >= +${HEDGE_TARGET_PROFIT_USD:.2f} "
+                f"(Original #{orig_pos.ticket}: ${orig_pnl:.2f}, Hedge #{hedge_pos.ticket}: +${hedge_pnl:.2f}). "
+                f"Immediately closing both trades..."
+            )
+            # Close position with highest profit first, then the remaining
+            to_close = sorted([orig_pos, hedge_pos], key=lambda p: (p.profit + p.swap), reverse=True)
+            for p in to_close:
+                close_position(symbol, p)
+                
+            trade_peak_profit.clear()
+            last_close_time = time.time()
+            return False
+
+        # Periodic status log for hedged basket (every 10 seconds)
+        now = time.time()
+        if now - last_status_log_time >= 10:
+            last_status_log_time = now
+            orig_dir = "BUY" if orig_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+            hedge_dir = "BUY" if hedge_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+            logger.info(
+                f"⚖️ Hedged Basket Active | Orig #{orig_pos.ticket} ({orig_dir} {orig_pos.volume}l @ {orig_pos.price_open:.2f}): ${orig_pnl:.2f} | "
+                f"Hedge #{hedge_pos.ticket} ({hedge_dir} {hedge_pos.volume}l @ {hedge_pos.price_open:.2f}): ${hedge_pnl:.2f} | "
+                f"Net Basket P&L: ${combined_pnl:.2f} (Target: +${HEDGE_TARGET_PROFIT_USD:.2f})"
+            )
+        return True
+
+    # --- CASE B: Single Active Position ---
     position = positions[0]
     ticket = position.ticket
     total_pnl = position.profit + position.swap + getattr(position, 'commission', 0.0)
-    
-    # Track peak profit for this ticket
+    is_hedge_pos = (position.comment and "Hedge" in position.comment) or (position.volume == HEDGE_VOLUME)
+
+    # If this is the original trade and loss touches -$6.00 or lower, trigger hedge!
+    if not is_hedge_pos:
+        if total_pnl <= HEDGE_TRIGGER_LOSS_USD:
+            open_hedge_trade(symbol, position)
+            return True
+
+    # Track peak profit for single trade
     if ticket not in trade_peak_profit:
         trade_peak_profit[ticket] = total_pnl
     else:
@@ -370,7 +469,7 @@ def manage_active_trade(symbol):
             last_close_time = time.time()
             return False
 
-    # 2. Profit Exit Management
+    # 2. Profit Exit Management for Single Trade
     if peak >= BE_ACTIVATION_USD and peak < TRAIL_ACTIVATION_USD:
         # Tier 1: Break-Even Floor Protection
         if total_pnl <= MIN_LOCKED_PROFIT_USD:
@@ -396,15 +495,16 @@ def manage_active_trade(symbol):
         last_status_log_time = now
         trade_dir = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
         sl_str = f"SL: {position.sl:.2f}" if position.sl > 0 else "SL: DISABLED"
+        hedge_info = f" | Hedge Trigger: ${HEDGE_TRIGGER_LOSS_USD:.2f}" if not is_hedge_pos else ""
         logger.info(
             f"📈 Active #{ticket} ({trade_dir} {position.volume} lots @ {position.price_open:.2f} | {sl_str}) | "
-            f"P&L: ${total_pnl:.2f} | Peak: +${peak:.2f}"
+            f"P&L: ${total_pnl:.2f} | Peak: +${peak:.2f}{hedge_info}"
         )
         
     return True
 
 def run_bot():
-    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Single-Trade Bot."""
+    """Main execution loop for the $6K Funded Account XAUUSD M5 BB Hedging Bot."""
     global last_close_time, last_processed_candle_time
     
     if not mt5.initialize():
@@ -417,13 +517,12 @@ def run_bot():
         return
         
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Single-Trade Disciplined Bot")
+    logger.info(f"🚀 Started $6K Funded Account {SYMBOL} Bollinger Bands Bot with 0.03 Hedge")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Execution: STRICTLY 1 trade at a time (No hedging, zero orphan risk)")
-    logger.info(f"Trade Volume: {TRADE_VOLUME} lots ($1.00 move on Gold = $1.00)")
-    logger.info(f"Stop Loss: DISABLED (Patient trade execution)")
-    logger.info(f"Tier 1 BE Floor: +${MIN_LOCKED_PROFIT_USD:.2f} locked once profit touches +${BE_ACTIVATION_USD:.2f}")
-    logger.info(f"Tier 2 Trailing: Active at +${TRAIL_ACTIVATION_USD:.2f}+ (Exits on -${TRAIL_PULLBACK_USD:.2f} drop from peak)")
+    logger.info(f"Original Trade Volume: {TRADE_VOLUME} lots ($1.00 move on Gold = $1.00)")
+    logger.info(f"Hedge Strategy: If original trade <= ${HEDGE_TRIGGER_LOSS_USD:.2f}, open {HEDGE_VOLUME} lots opposite")
+    logger.info(f"Hedge Exit: Close both trades once combined basket net profit >= +${HEDGE_TARGET_PROFIT_USD:.2f}")
+    logger.info(f"Single Trade Trailing: BE floor +${MIN_LOCKED_PROFIT_USD:.2f} at +${BE_ACTIVATION_USD:.2f}, Trail at +${TRAIL_ACTIVATION_USD:.2f}+")
     logger.info(f"Daily Loss Killswitch: -${MAX_DAILY_LOSS_USD:.2f} (2.5% max daily account safety buffer)")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $6,000 account)")
     logger.info("=" * 65)
