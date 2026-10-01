@@ -32,13 +32,13 @@ BB_SHIFT = 0                        # Shift 0
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Trade Risk & Multi-Stage Zone Recovery Parameters ---
-TRADE_VOLUME = 0.01                 # Initial trade volume: 0.01 lots ($1.00 move in Gold = $1.00)
+TRADE_VOLUME = 0.1                 # Initial trade volume: 0.01 lots ($1.00 move in Gold = $1.00)
 SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
 MAX_LOSS_USD = 0.0                  # Dollar loss floor: Disabled (Hedging manages drawdowns)
 
 # --- Multi-Trade Hedging (Zone Recovery) Settings ---
-HEDGE_TRIGGER_LOSS_USD = -6.00      # Floating loss on Level 1 trade to trigger initial hedge (-$6.00 or lower)
-HEDGE_TARGET_PROFIT_USD = 2.00      # Target net profit: closes ALL trades immediately when reached (+$2.00)
+HEDGE_TRIGGER_LOSS_USD = -60.00      # Floating loss on Level 1 trade to trigger initial hedge (-$6.00 or lower)
+HEDGE_TARGET_PROFIT_USD = 20.00      # Target net profit: closes ALL trades immediately when reached (+$2.00)
 MAX_HEDGE_LEVELS = 10               # Maximum recovery levels allowed before waiting (safety ceiling)
 
 # Lot sizing progression for each recovery level:
@@ -47,7 +47,7 @@ MAX_HEDGE_LEVELS = 10               # Maximum recovery levels allowed before wai
 # Level 3: 0.05 (Second counter-hedge)
 # Level 4: 0.08 (Third counter-hedge)
 # Level 5+: Scaled progression to ensure breakout in either direction yields net profit
-HEDGE_LOT_SIZES = [0.01, 0.03, 0.05, 0.08, 0.13, 0.21, 0.34, 0.55, 0.89, 1.44]
+HEDGE_LOT_SIZES = [0.1, 0.3, 0.5, 0.8, 1.3, 2.1, 3.4, 5.5, 8.9, 14.4]
 
 def get_volume_for_level(level):
     """Returns lot size for given recovery level (1-indexed)."""
