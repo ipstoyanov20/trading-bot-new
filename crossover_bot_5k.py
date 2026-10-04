@@ -1,3 +1,4 @@
+import os
 import MetaTrader5 as mt5
 import time
 import logging
@@ -126,6 +127,16 @@ def send_push_notification(title, message):
                 )
             except Exception as e:
                 logger.debug(f"ntfy push error: {e}")
+
+        # 3. MetaTrader Mobile App "Messages" Tab (via MQL5 PushNotificationBridge)
+        try:
+            common_files_dir = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
+            if os.path.exists(common_files_dir):
+                notif_path = os.path.join(common_files_dir, "push_notification.txt")
+                with open(notif_path, "w", encoding="utf-8") as f:
+                    f.write(f"{title}: {message}")
+        except Exception as e:
+            logger.debug(f"MT5 common file error: {e}")
 
     threading.Thread(target=_deliver, daemon=True).start()
 
