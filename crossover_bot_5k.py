@@ -3,6 +3,10 @@ import time
 import logging
 from datetime import datetime
 import pandas as pd
+import subprocess
+import threading
+import xml.sax.saxutils as saxutils
+import requests
 
 import config
 
@@ -17,6 +21,11 @@ PHASE_2_TARGET_USD = 200.0          # Phase 2 Target: 4% (+$200.00)
 MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - MONITORING ONLY
 MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - MONITORING ONLY
 MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: 3% (-$150.00) - MONITORING ONLY
+
+# --- Push Notification Settings ---
+ENABLE_WINDOWS_TOAST = True            # Send native Windows desktop push notifications
+ENABLE_NTFY_PUSH = True                # Send instant mobile push notifications via ntfy.sh
+NTFY_TOPIC = "tradingbot_5k_ivaylo"    # Topic for ntfy mobile app (https://ntfy.sh/tradingbot_5k_ivaylo)
 
 # --- Trading Strategy & Symbol Settings ---
 SYMBOL = "XAUUSD"                   # Gold Bot
@@ -72,16 +81,56 @@ limit_notified_daily = False        # Has daily loss limit been notified?
 limit_notified_total = False        # Has total loss limit been notified?
 limit_notified_max_risk = False     # Has max risk limit been notified?
 
-def send_mt5_notification(title, message):
+def send_push_notification(title, message):
     """
-    Sends a notification to MetaTrader 5 platform.
-    This will appear as an alert in MT5.
+    Sends actual push notifications across configured channels:
+    1. Desktop: Native Windows Toast banner notification (with sound & Action Center notification).
+    2. Mobile/Browser: Free instant push notifications via ntfy.sh (https://ntfy.sh/{NTFY_TOPIC}
+       or use the ntfy app on iOS/Android).
+    3. Console: Logged as a warning banner.
+    Runs asynchronously in a background thread to prevent blocking trading execution.
     """
-    try:
-        logger.warning(f"📢 MT5 ALERT: {title} | {message}")
-        # MT5 will display logger.warning as platform notifications
-    except Exception as e:
-        logger.error(f"Failed to send notification: {e}")
+    logger.warning(f"📢 PUSH NOTIFICATION: {title} | {message}")
+
+    def _deliver():
+        # 1. Desktop Windows Toast Notification
+        if ENABLE_WINDOWS_TOAST:
+            try:
+                clean_title = saxutils.escape(str(title))
+                clean_message = saxutils.escape(str(message))
+                ps_cmd = f'''
+                [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+                $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+                $textNodes = $template.GetElementsByTagName('text')
+                $textNodes.Item(0).InnerText = '{clean_title}'
+                $textNodes.Item(1).InnerText = '{clean_message}'
+                $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
+                $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe')
+                $notifier.Show($toast)
+                '''
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
+            except Exception as e:
+                logger.debug(f"Windows toast error: {e}")
+
+        # 2. Mobile / Web Push Notification via ntfy.sh
+        if ENABLE_NTFY_PUSH and NTFY_TOPIC:
+            try:
+                requests.post(
+                    f"https://ntfy.sh/{NTFY_TOPIC}",
+                    data=message.encode('utf-8'),
+                    headers={
+                        "Title": title.encode('utf-8'),
+                        "Tags": "robot,chart_with_upwards_trend"
+                    },
+                    timeout=5
+                )
+            except Exception as e:
+                logger.debug(f"ntfy push error: {e}")
+
+    threading.Thread(target=_deliver, daemon=True).start()
+
+# Backward-compatible alias
+send_mt5_notification = send_push_notification
 
 def get_filling_type(symbol):
     """
@@ -637,6 +686,12 @@ def run_bot():
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
     logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
     logger.info("=" * 65)
+
+    # Startup Push Notification Test
+    send_push_notification(
+        "🚀 5K Bot Online",
+        f"Push notification test successful! Bot active on {SYMBOL} (M5). Monitoring Challenge Limits: Daily -${MAX_DAILY_LOSS_USD:.0f}, Max -${MAX_TOTAL_LOSS_USD:.0f}."
+    )
     
     try:
         while True:
