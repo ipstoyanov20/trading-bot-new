@@ -21,8 +21,8 @@ PHASE_1_TARGET_USD = 400.0          # Phase 1 Target: 8% (+$400.00)
 PHASE_2_TARGET_USD = 200.0          # Phase 2 Target: 4% (+$200.00)
 MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - MONITORING ONLY
 MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - MONITORING ONLY
-MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: 3% (-$150.00) - 3% of $5,000 balance
-EMERGENCY_HEDGE_TRIGGER_LOSS_USD = -140.0  # Floating loss threshold to activate Emergency Delta-Lock before -$150
+MAX_RISK_AT_ANY_TIME_USD = 100.0    # Max Risk at any time: -$100.00 limit
+EMERGENCY_HEDGE_TRIGGER_LOSS_USD = -90.0  # Floating loss threshold to activate Emergency Delta-Lock before -$100
 
 # --- Push Notification Settings ---
 ENABLE_WINDOWS_TOAST = True            # Send native Windows desktop push notifications
@@ -45,29 +45,32 @@ BB_SHIFT = 0                        # Shift 0
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
 # --- Trade Risk & Multi-Stage Zone Recovery Parameters ---
-TRADE_VOLUME = 0.05                 # Initial trade volume: 0.05 lots (challenge-safe)
+TRADE_VOLUME = 0.01                 # Initial trade volume: starts from 0.01 lots
 SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
-MAX_LOSS_USD = 150.0                # Hard Loss Floor: 3% of $5,000 ($150.00). Stops losing more than $150!
+MAX_LOSS_USD = 100.0                # Hard Loss Floor: $100.00. Closes all positions if total loss > $100!
 
 # --- Multi-Trade Hedging (Zone Recovery) Settings ---
-HEDGE_TRIGGER_LOSS_USD = -30.00     # Floating loss on Level 1 trade to trigger initial hedge (-$30.00 for 0.05 L1)
-HEDGE_TARGET_PROFIT_USD = 10.00     # Target net profit: closes ALL trades immediately when reached (+$10.00)
-MAX_HEDGE_LEVELS = 5                # Maximum recovery levels allowed (challenge-safe limit)
+HEDGE_TRIGGER_LOSS_USD = -5.00      # First hedge triggers when Level 1 trade reaches -$5.00 loss ($5 move on 0.01)
+HEDGE_TARGET_PROFIT_USD = 2.50      # Target net profit: closes ALL trades immediately when reached (+$2.50)
+TRAILING_PROFIT_DROP_USD = 4.00     # Trailing profit lock: closes original trade if profit drops $4.00 from peak
+MAX_HEDGE_LEVELS = 7                # Maximum recovery levels allowed
 
-# Lot sizing progression with difference between each level strictly 0.05 lots:
-# Level 1: 0.05 (Initial trade)
-# Level 2: 0.10 (+0.05 difference)
-# Level 3: 0.15 (+0.05 difference)
-# Level 4: 0.20 (+0.05 difference)
-# Level 5: 0.25 (+0.05 difference)
-HEDGE_LOT_SIZES = [0.05, 0.10, 0.15, 0.20, 0.25]
+# Lot sizing progression: Hedges are DOUBLED at each level:
+# Level 1: 0.01 (Initial trade)
+# Level 2: 0.02 (1st counter-hedge, 2x)
+# Level 3: 0.04 (2nd counter-hedge, 2x)
+# Level 4: 0.08 (3rd counter-hedge, 2x)
+# Level 5: 0.16 (4th counter-hedge, 2x)
+# Level 6: 0.32 (5th counter-hedge, 2x)
+# Level 7: 0.64 (6th counter-hedge, 2x)
+HEDGE_LOT_SIZES = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64]
 
 def get_volume_for_level(level):
-    """Returns lot size for given recovery level (1-indexed), stepping by 0.05 lots."""
+    """Returns lot size for given recovery level (1-indexed), doubling each level."""
     idx = level - 1
     if idx < len(HEDGE_LOT_SIZES):
         return HEDGE_LOT_SIZES[idx]
-    return round(0.05 * level, 2)
+    return round(0.01 * (2 ** idx), 2)
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
@@ -647,12 +650,12 @@ def manage_active_trade(symbol):
         last_close_time = time.time()
         return False
 
-    # 2. Hard Downside Watchdog: Stop losing more than $150 (3% of $5,000)
+    # 2. Hard Downside Watchdog: Stop losing more than $100
     if MAX_LOSS_USD > 0 and total_basket_pnl <= -MAX_LOSS_USD:
-        logger.warning(f"🛑 3% Hard Loss Stop Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing all positions to protect challenge...")
+        logger.warning(f"🛑 Hard Loss Stop Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing all positions...")
         send_push_notification(
-            "🛑 3% Hard Loss Stop Triggered",
-            f"Basket loss reached -${abs(total_basket_pnl):.2f} (Limit: -${MAX_LOSS_USD:.2f}). Closed all positions immediately to protect challenge!"
+            "🛑 Hard Loss Stop Triggered",
+            f"Basket loss reached -${abs(total_basket_pnl):.2f} (Limit: -${MAX_LOSS_USD:.2f}). Closed all positions immediately!"
         )
         close_all_positions(symbol, f"Watchdog Max Loss -${abs(total_basket_pnl):.2f}")
         trade_peak_profit.clear()
@@ -684,8 +687,32 @@ def manage_active_trade(symbol):
     if len(positions) == 1:
         pos = positions[0]
         ticket = pos.ticket
+        current_pnl = total_basket_pnl
         
-        # Check if Level 1 reached -$30.00 loss threshold -> Trigger Level 2 Hedge!
+        # Track Peak Floating Profit for Trailing Take-Profit
+        peak_pnl = trade_peak_profit.get(ticket, current_pnl)
+        if current_pnl > peak_pnl:
+            peak_pnl = current_pnl
+            trade_peak_profit[ticket] = peak_pnl
+
+        # Trailing Profit Lock: If in profit and price drops $4.00 from peak, close and bank the profit!
+        # "if there isn't any loss leave the profit on original trade when the price go under -4 dollars from it peak"
+        trailing_drop = peak_pnl - current_pnl
+        if peak_pnl >= TRAILING_PROFIT_DROP_USD and trailing_drop >= TRAILING_PROFIT_DROP_USD and current_pnl > 0:
+            logger.info(
+                f"🎯 TRAILING PROFIT LOCK! Trade #{ticket} peak was +${peak_pnl:.2f}, dropped by ${trailing_drop:.2f} >= ${TRAILING_PROFIT_DROP_USD:.2f}. "
+                f"Closing trade to lock in +${current_pnl:.2f} profit!"
+            )
+            send_push_notification(
+                "🎯 Trailing Profit Locked!",
+                f"Level 1 closed at +${current_pnl:.2f} (pulled back ${trailing_drop:.2f} from peak +${peak_pnl:.2f}) on {symbol}!"
+            )
+            close_all_positions(symbol, f"Trailing Profit Lock +${current_pnl:.2f}")
+            trade_peak_profit.clear()
+            last_close_time = time.time()
+            return False
+
+        # Check if Level 1 reached -$5.00 loss threshold -> Trigger Level 2 Hedge (Doubled to 0.02 lots)!
         if total_basket_pnl <= HEDGE_TRIGGER_LOSS_USD:
             hedge_dir = "SELL" if pos.type == mt5.POSITION_TYPE_BUY else "BUY"
             hedge_vol = get_volume_for_level(2)
@@ -705,8 +732,8 @@ def manage_active_trade(symbol):
             trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
             logger.info(
                 f"📈 Active Level 1 #{ticket} ({trade_dir} {pos.volume} lots @ {pos.price_open:.2f}) | "
-                f"P&L: ${total_basket_pnl:.2f} / Target: +${HEDGE_TARGET_PROFIT_USD:.2f} | "
-                f"Hedge Trigger: ${HEDGE_TRIGGER_LOSS_USD:.2f}"
+                f"P&L: ${total_basket_pnl:.2f} (Peak: +${peak_pnl:.2f}) | Target: +${HEDGE_TARGET_PROFIT_USD:.2f} | "
+                f"Hedge Trigger: ${HEDGE_TRIGGER_LOSS_USD:.2f} | Trailing Lock: -${TRAILING_PROFIT_DROP_USD:.2f} from peak"
             )
         return True
 
