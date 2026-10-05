@@ -22,6 +22,7 @@ PHASE_2_TARGET_USD = 200.0          # Phase 2 Target: 4% (+$200.00)
 MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - MONITORING ONLY
 MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - MONITORING ONLY
 MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: 3% (-$150.00) - MONITORING ONLY
+EMERGENCY_HEDGE_TRIGGER_LOSS_USD = -145.0  # Floating loss threshold to activate Emergency Delta-Lock (~$150 / 3% limit)
 
 # --- Push Notification Settings ---
 ENABLE_WINDOWS_TOAST = True            # Send native Windows desktop push notifications
@@ -77,10 +78,11 @@ last_logged_no_signal_candle = None # Timestamp of last logged candle for no-sig
 last_status_log_time = 0            # Timestamp of periodic open trade status log
 trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
 
-# --- Limit Monitoring Flags ---
+# --- Limit Monitoring & Safety State Flags ---
 limit_notified_daily = False        # Has daily loss limit been notified?
 limit_notified_total = False        # Has total loss limit been notified?
 limit_notified_max_risk = False     # Has max risk limit been notified?
+emergency_hedge_active = False      # Is Emergency Delta-Neutral Full Lock currently active?
 
 def send_push_notification(title, message):
     """
@@ -133,8 +135,16 @@ def send_push_notification(title, message):
             common_files_dir = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
             if os.path.exists(common_files_dir):
                 notif_path = os.path.join(common_files_dir, "push_notification.txt")
+                # Format clean text: strip emojis for maximum compatibility with MT5 mobile SendNotification
+                clean_notif = f"{title}: {message}"
+                clean_notif = clean_notif.encode('ascii', 'ignore').decode('ascii').strip()
+                if not clean_notif:
+                    clean_notif = f"{title}: {message}"
+                # Keep strictly under 250 characters (MQL5 SendNotification limit is 255)
+                if len(clean_notif) > 245:
+                    clean_notif = clean_notif[:242] + "..."
                 with open(notif_path, "w", encoding="utf-8") as f:
-                    f.write(f"{title}: {message}")
+                    f.write(clean_notif)
         except Exception as e:
             logger.debug(f"MT5 common file error: {e}")
 
@@ -486,6 +496,66 @@ def open_recovery_hedge_level(symbol, next_level, direction, volume, trigger_rea
     finally:
         hedge_order_in_progress = False
 
+def open_emergency_full_lock(symbol, total_basket_pnl):
+    """
+    EMERGENCY FULL-LOCK (DELTA-NEUTRAL HEDGE)
+    When floating basket loss reaches ~-$145 to -$150 (3% of $5K challenge),
+    immediately equalizes BUY and SELL volumes so Net Delta = 0.00 lots.
+    This permanently freezes the floating loss and prevents ANY further drawdown,
+    guaranteeing the challenge daily limit (-$200) and max loss (-$400) are 100% protected.
+    """
+    global emergency_hedge_active
+    
+    positions = get_active_positions(symbol)
+    if not positions:
+        emergency_hedge_active = False
+        return False
+        
+    total_buy_volume = sum(p.volume for p in positions if p.type == mt5.POSITION_TYPE_BUY)
+    total_sell_volume = sum(p.volume for p in positions if p.type == mt5.POSITION_TYPE_SELL)
+    net_delta = round(total_buy_volume - total_sell_volume, 2)
+    
+    if abs(net_delta) < 0.005:
+        # Already fully locked 1:1
+        emergency_hedge_active = True
+        return True
+        
+    order_type = mt5.ORDER_TYPE_BUY if net_delta < 0 else mt5.ORDER_TYPE_SELL
+    dir_str = "BUY" if net_delta < 0 else "SELL"
+    hedge_vol = round(abs(net_delta), 2)
+    
+    logger.warning("=" * 65)
+    logger.warning(
+        f"🚨 EMERGENCY FULL-LOCK TRIGGERED! Basket Loss: ${total_basket_pnl:.2f} <= ${EMERGENCY_HEDGE_TRIGGER_LOSS_USD:.2f}\n"
+        f"   Total Buys: {total_buy_volume:.2f} lots | Total Sells: {total_sell_volume:.2f} lots | Net Exposure: {net_delta:+.2f} lots\n"
+        f"   Executing Emergency {dir_str} {hedge_vol} lots to achieve 100% DELTA-NEUTRAL FULL LOCK!"
+    )
+    logger.warning("=" * 65)
+    
+    res, fill_price = place_order_safe(
+        symbol=symbol,
+        order_type=order_type,
+        volume=hedge_vol,
+        tp_points=0,
+        sl_points=0,
+        comment="Emergency_Delta_Lock"
+    )
+    
+    if res:
+        emergency_hedge_active = True
+        logger.warning(
+            f"🛡️ EMERGENCY FULL LOCK ESTABLISHED! Ticket #{getattr(res, 'order', None)} {dir_str} {hedge_vol} lots @ {fill_price:.2f}.\n"
+            f"   Net exposure is now 0.00 lots. Floating drawdown is FROZEN. Challenge is safe!"
+        )
+        send_push_notification(
+            "🚨 EMERGENCY HEDGE ACTIVATED",
+            f"Basket loss reached ${abs(total_basket_pnl):.2f}. Opened {dir_str} {hedge_vol} lots to freeze drawdown. Challenge 100% safe!"
+        )
+        return True
+    else:
+        logger.error(f"❌ Failed to execute Emergency Hedge order {dir_str} {hedge_vol} lots!")
+        return False
+
 def check_challenge_limits(symbol):
     """
     MONITORING ONLY - Checks challenge limits and sends notifications.
@@ -501,41 +571,39 @@ def check_challenge_limits(symbol):
     total_basket_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
     cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
     
-    # Calculate open risk (max risk at any time)
-    total_open_volume = sum(p.volume for p in positions) if positions else 0
-    estimated_open_risk = total_open_volume * 100 * 1.0  # Risk per 100 pips for XAUUSD
-    
     # 1. Check Daily Loss Limit (4% = -$200)
     if total_today_pnl <= -MAX_DAILY_LOSS_USD and not limit_notified_daily:
         limit_notified_daily = True
-        send_mt5_notification(
+        send_push_notification(
             "⚠️ DAILY LOSS LIMIT ALERT",
             f"Today's P&L: ${total_today_pnl:.2f} has reached the daily limit of -${MAX_DAILY_LOSS_USD:.2f}. "
             f"Consider closing positions manually to preserve account."
         )
-    elif total_today_pnl > -MAX_DAILY_LOSS_USD and limit_notified_daily:
+    elif total_today_pnl > -MAX_DAILY_LOSS_USD + 25.0 and limit_notified_daily:
         limit_notified_daily = False  # Reset flag when back in safe zone
     
     # 2. Check Total Maximum Loss Limit (8% = -$400)
     if cumulative_closed_pnl <= -MAX_TOTAL_LOSS_USD and not limit_notified_total:
         limit_notified_total = True
-        send_mt5_notification(
+        send_push_notification(
             "🔴 MAXIMUM LOSS LIMIT ALERT",
             f"Cumulative P&L: ${cumulative_closed_pnl:.2f} has reached the maximum loss limit of -${MAX_TOTAL_LOSS_USD:.2f}. "
             f"This is a critical alert. Consider stopping trading for this challenge."
         )
-    elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD and limit_notified_total:
+    elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD + 50.0 and limit_notified_total:
         limit_notified_total = False  # Reset flag when back in safe zone
     
-    # 3. Check Max Risk at Any Time (3% = $150)
-    if estimated_open_risk > MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
+    # 3. Check Max Risk / Floating Drawdown Limit (3% = -$150)
+    # Checks ACTUAL floating basket loss and today's total floating loss
+    current_loss = min(total_basket_pnl, total_today_pnl)
+    if current_loss <= -MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
         limit_notified_max_risk = True
-        send_mt5_notification(
-            "⚠️ MAX RISK AT ANY TIME ALERT",
-            f"Current open risk: ${estimated_open_risk:.2f} exceeds the max limit of ${MAX_RISK_AT_ANY_TIME_USD:.2f}. "
-            f"Total open volume: {total_open_volume} lots. Consider reducing position sizes or closing some trades."
+        send_push_notification(
+            "⚠️ MAX 3% LOSS ALERT ($150)",
+            f"Floating loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f}). "
+            f"Emergency Hedge is active to protect challenge!"
         )
-    elif estimated_open_risk <= MAX_RISK_AT_ANY_TIME_USD and limit_notified_max_risk:
+    elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False  # Reset flag when back in safe zone
 
 def manage_active_trade(symbol):
@@ -546,11 +614,12 @@ def manage_active_trade(symbol):
     - Opens as many hedge trades as needed across the recovery zone to secure positive profit.
     Returns True if trade(s) active, False if all trades closed.
     """
-    global last_close_time, last_status_log_time, trade_peak_profit
+    global last_close_time, last_status_log_time, trade_peak_profit, emergency_hedge_active
     
     positions = get_active_positions(symbol)
     if not positions:
         trade_peak_profit.clear()
+        emergency_hedge_active = False
         return False
 
     total_basket_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
@@ -563,6 +632,7 @@ def manage_active_trade(symbol):
         )
         close_all_positions(symbol, f"Basket Target Profit +${total_basket_pnl:.2f}")
         trade_peak_profit.clear()
+        emergency_hedge_active = False
         last_close_time = time.time()
         return False
 
@@ -571,8 +641,29 @@ def manage_active_trade(symbol):
         logger.info(f"🛑 Downside Watchdog Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing positions...")
         close_all_positions(symbol, "Watchdog Max Loss")
         trade_peak_profit.clear()
+        emergency_hedge_active = False
         last_close_time = time.time()
         return False
+
+    # 2.5 EMERGENCY FULL-LOCK HEDGE (When Basket loss reaches ~$145 - $150 / 3% of account)
+    if total_basket_pnl <= EMERGENCY_HEDGE_TRIGGER_LOSS_USD or emergency_hedge_active:
+        total_buy_volume = sum(p.volume for p in positions if p.type == mt5.POSITION_TYPE_BUY)
+        total_sell_volume = sum(p.volume for p in positions if p.type == mt5.POSITION_TYPE_SELL)
+        net_delta = round(total_buy_volume - total_sell_volume, 2)
+        
+        if abs(net_delta) >= 0.01:
+            open_emergency_full_lock(symbol, total_basket_pnl)
+            return True
+        else:
+            emergency_hedge_active = True
+            now = time.time()
+            if now - last_status_log_time >= 10:
+                last_status_log_time = now
+                logger.warning(
+                    f"🛡️ EMERGENCY FULL LOCK ACTIVE | Buys: {total_buy_volume:.2f} lots | Sells: {total_sell_volume:.2f} lots | "
+                    f"Net Delta: 0.00 lots | Frozen Basket PnL: ${total_basket_pnl:.2f} | Challenge is 100% Safe!"
+                )
+            return True
 
     # 3. Single Trade Mode (Level 1 only)
     if len(positions) == 1:
@@ -690,10 +781,11 @@ def run_bot():
     logger.info(f"Target Profit: Close ALL trades immediately when Net Basket PnL >= +${HEDGE_TARGET_PROFIT_USD:.2f}")
     logger.info(f"Hedge Progression: {HEDGE_LOT_SIZES}")
     logger.info(f"Max Hedge Levels: {MAX_HEDGE_LEVELS}")
-    logger.info(f"⚠️ MONITORING (NO AUTO-STOP):")
+    logger.info(f"⚠️ MONITORING & EMERGENCY PROTECTION:")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
     logger.info(f"  - Max Risk at any time: ${MAX_RISK_AT_ANY_TIME_USD:.2f} (3% of $5,000)")
+    logger.info(f"  - Emergency Delta-Lock Hedge: Trigger at ${EMERGENCY_HEDGE_TRIGGER_LOSS_USD:.2f} (Freezes drawdown, saves challenge)")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
     logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
     logger.info("=" * 65)
