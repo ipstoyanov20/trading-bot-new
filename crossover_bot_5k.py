@@ -21,8 +21,8 @@ PHASE_1_TARGET_USD = 400.0          # Phase 1 Target: 8% (+$400.00)
 PHASE_2_TARGET_USD = 200.0          # Phase 2 Target: 4% (+$200.00)
 MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - MONITORING ONLY
 MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - MONITORING ONLY
-MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: 3% (-$150.00) - MONITORING ONLY
-EMERGENCY_HEDGE_TRIGGER_LOSS_USD = -145.0  # Floating loss threshold to activate Emergency Delta-Lock (~$150 / 3% limit)
+MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: 3% (-$150.00) - 3% of $5,000 balance
+EMERGENCY_HEDGE_TRIGGER_LOSS_USD = -140.0  # Floating loss threshold to activate Emergency Delta-Lock before -$150
 
 # --- Push Notification Settings ---
 ENABLE_WINDOWS_TOAST = True            # Send native Windows desktop push notifications
@@ -47,28 +47,27 @@ AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 # --- Trade Risk & Multi-Stage Zone Recovery Parameters ---
 TRADE_VOLUME = 0.05                 # Initial trade volume: 0.05 lots (challenge-safe)
 SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
-MAX_LOSS_USD = 0.0                  # Dollar loss floor: Disabled (Hedging manages drawdowns)
+MAX_LOSS_USD = 150.0                # Hard Loss Floor: 3% of $5,000 ($150.00). Stops losing more than $150!
 
 # --- Multi-Trade Hedging (Zone Recovery) Settings ---
 HEDGE_TRIGGER_LOSS_USD = -30.00     # Floating loss on Level 1 trade to trigger initial hedge (-$30.00 for 0.05 L1)
 HEDGE_TARGET_PROFIT_USD = 10.00     # Target net profit: closes ALL trades immediately when reached (+$10.00)
 MAX_HEDGE_LEVELS = 5                # Maximum recovery levels allowed (challenge-safe limit)
 
-# Lot sizing progression for each recovery level (challenge-safe progression):
+# Lot sizing progression with difference between each level strictly 0.05 lots:
 # Level 1: 0.05 (Initial trade)
-# Level 2: 0.08 (First counter-hedge, +0.03)
-# Level 3: 0.11 (Second counter-hedge, +0.03)
-# Level 4: 0.14 (Third counter-hedge, +0.03)
-# Level 5: 0.17 (Fourth counter-hedge, +0.03)
-HEDGE_LOT_SIZES = [0.05, 0.08, 0.11, 0.14, 0.17]
+# Level 2: 0.10 (+0.05 difference)
+# Level 3: 0.15 (+0.05 difference)
+# Level 4: 0.20 (+0.05 difference)
+# Level 5: 0.25 (+0.05 difference)
+HEDGE_LOT_SIZES = [0.05, 0.10, 0.15, 0.20, 0.25]
 
 def get_volume_for_level(level):
-    """Returns lot size for given recovery level (1-indexed)."""
+    """Returns lot size for given recovery level (1-indexed), stepping by 0.05 lots."""
     idx = level - 1
     if idx < len(HEDGE_LOT_SIZES):
         return HEDGE_LOT_SIZES[idx]
-    # No additional levels beyond 5 for challenge safety
-    return HEDGE_LOT_SIZES[-1]
+    return round(0.05 * level, 2)
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
@@ -450,6 +449,10 @@ def open_single_trade(symbol, direction):
             f"Target Profit: +${HEDGE_TARGET_PROFIT_USD:.2f} | "
             f"Hedge Trigger: <= ${HEDGE_TRIGGER_LOSS_USD:.2f}"
         )
+        send_push_notification(
+            f"🟢 Level 1 {direction} Placed",
+            f"{SYMBOL} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | Target: +${HEDGE_TARGET_PROFIT_USD:.2f}"
+        )
         return res, fill_price
     return None, 0.0
 
@@ -486,6 +489,10 @@ def open_recovery_hedge_level(symbol, next_level, direction, volume, trigger_rea
                 logger.info(
                     f"✅ Level {next_level} Hedge Placed: #{getattr(res, 'order', None)} {direction} {volume} lots @ {fill_price:.2f} | "
                     f"Targeting Net Basket Profit >= +${HEDGE_TARGET_PROFIT_USD:.2f}"
+                )
+                send_push_notification(
+                    f"⚖️ Level {next_level} Hedge Placed",
+                    f"{symbol} {direction} {volume} lots @ {fill_price:.2f} | {trigger_reason}"
                 )
                 return res, fill_price
             logger.warning(f"⚠️ Level {next_level} hedge attempt {attempt + 1}/3 failed. Retrying in 0.2s...")
@@ -630,16 +637,24 @@ def manage_active_trade(symbol):
             f"🎉 TARGET PROFIT ACHIEVED! Total Net PnL: +${total_basket_pnl:.2f} >= +${HEDGE_TARGET_PROFIT_USD:.2f} "
             f"across {len(positions)} active trade(s). Closing all trades immediately in profit!"
         )
+        send_push_notification(
+            "🎉 Target Profit Achieved!",
+            f"Basket closed in profit: +${total_basket_pnl:.2f} across {len(positions)} trades on {symbol}!"
+        )
         close_all_positions(symbol, f"Basket Target Profit +${total_basket_pnl:.2f}")
         trade_peak_profit.clear()
         emergency_hedge_active = False
         last_close_time = time.time()
         return False
 
-    # 2. Hard Downside Watchdog (only if MAX_LOSS_USD > 0, disabled by default = 0.0)
+    # 2. Hard Downside Watchdog: Stop losing more than $150 (3% of $5,000)
     if MAX_LOSS_USD > 0 and total_basket_pnl <= -MAX_LOSS_USD:
-        logger.info(f"🛑 Downside Watchdog Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing positions...")
-        close_all_positions(symbol, "Watchdog Max Loss")
+        logger.warning(f"🛑 3% Hard Loss Stop Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing all positions to protect challenge...")
+        send_push_notification(
+            "🛑 3% Hard Loss Stop Triggered",
+            f"Basket loss reached -${abs(total_basket_pnl):.2f} (Limit: -${MAX_LOSS_USD:.2f}). Closed all positions immediately to protect challenge!"
+        )
+        close_all_positions(symbol, f"Watchdog Max Loss -${abs(total_basket_pnl):.2f}")
         trade_peak_profit.clear()
         emergency_hedge_active = False
         last_close_time = time.time()
