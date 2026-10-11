@@ -247,13 +247,20 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
         
     return None, candle_time
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Single"):
+def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Single", notify_on_error=True):
     """
     Places an order on MT5 with filling mode fallback and returns (result, fill_price).
     """
+    action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
-        logger.error(f"Symbol {symbol} not found.")
+        err_msg = f"Symbol {symbol} not found."
+        logger.error(err_msg)
+        if notify_on_error:
+            send_push_notification(
+                f"❌ Trade Execution Failed ({action_name})",
+                f"Failed to execute {action_name} {volume} lots on {symbol} ({comment}). Error: {err_msg}"
+            )
         return None, 0.0
         
     if not symbol_info.visible:
@@ -261,7 +268,13 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
         
     tick = mt5.symbol_info_tick(symbol)
     if not tick:
-        logger.error(f"Failed to get tick for {symbol}")
+        err_msg = f"Failed to get tick for {symbol}"
+        logger.error(err_msg)
+        if notify_on_error:
+            send_push_notification(
+                f"❌ Trade Execution Failed ({action_name})",
+                f"Failed to execute {action_name} {volume} lots on {symbol} ({comment}). Error: {err_msg}"
+            )
         return None, 0.0
         
     price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
@@ -302,7 +315,6 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
         request["type_filling"] = mode
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
             logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | Hard SL: {sl} | Filling: {mode}")
             return res, price
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
@@ -312,6 +324,11 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
             
     err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
     logger.error(f"Failed to place order ({comment}): {err} | Request: {request}")
+    if notify_on_error:
+        send_push_notification(
+            f"❌ Trade Execution Failed ({action_name})",
+            f"Failed to execute {action_name} {volume} lots on {symbol} ({comment}). Error: {err}"
+        )
     return None, 0.0
 
 def get_active_positions(symbol):
@@ -486,7 +503,8 @@ def open_recovery_hedge_level(symbol, next_level, direction, volume, trigger_rea
                 volume=volume,
                 tp_points=0,
                 sl_points=0,
-                comment=comment
+                comment=comment,
+                notify_on_error=False  # Avoid intermediate alerts during retries
             )
             if res:
                 logger.info(
@@ -502,6 +520,10 @@ def open_recovery_hedge_level(symbol, next_level, direction, volume, trigger_rea
             time.sleep(0.2)
             
         logger.error(f"❌ Failed to place Level {next_level} hedge trade after 3 attempts!")
+        send_push_notification(
+            f"❌ Level {next_level} Hedge Failed",
+            f"Failed to place {direction} {volume} lots on {symbol} ({comment}) after 3 attempts!"
+        )
         return None, 0.0
     finally:
         hedge_order_in_progress = False
@@ -837,6 +859,21 @@ def run_bot():
         "🚀 5K Bot Online",
         f"Push notification test successful! Bot active on {SYMBOL} (M5). Monitoring Challenge Limits: Daily -${MAX_DAILY_LOSS_USD:.0f}, Max -${MAX_TOTAL_LOSS_USD:.0f}."
     )
+    
+    # =========================================================================
+    # 🧪 TEMPORARY TEST BLOCK: Intentional Trade Execution Failure Test
+    # Purpose: Verify how the failed trade error notification looks and behaves.
+    # Note: Comment out or remove this block after verification.
+    # =========================================================================
+    logger.info("🧪 [TEST PHASE] Running intentional trade execution failure test...")
+    place_order_safe(
+        symbol=SYMBOL,
+        order_type=mt5.ORDER_TYPE_BUY,
+        volume=0.0,  # Invalid volume (0.0 lots) intentionally causes broker rejection (Code: 10014)
+        comment="TEST_FAIL_ORDER",
+        notify_on_error=True
+    )
+    # =========================================================================
     
     try:
         while True:
