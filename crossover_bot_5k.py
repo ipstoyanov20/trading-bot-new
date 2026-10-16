@@ -780,14 +780,14 @@ def run_bot():
     # Purpose: Verify how the failed trade error notification looks and behaves.
     # Note: Comment out or remove this block after verification.
     # =========================================================================
-    logger.info("🧪 [TEST PHASE] Running intentional trade execution failure test...")
-    place_order_safe(
-        symbol=SYMBOL,
-        order_type=mt5.ORDER_TYPE_BUY,
-        volume=0.0,  # Invalid volume (0.0 lots) intentionally causes broker rejection (Code: 10014)
-        comment="TEST_FAIL_ORDER",
-        notify_on_error=True
-    )
+    # logger.info("🧪 [TEST PHASE] Running intentional trade execution failure test...")
+    # place_order_safe(
+    #     symbol=SYMBOL,
+    #     order_type=mt5.ORDER_TYPE_BUY,
+    #     volume=0.0,  # Invalid volume (0.0 lots) intentionally causes broker rejection (Code: 10014)
+    #     comment="TEST_FAIL_ORDER",
+    #     notify_on_error=True
+    # )
     # =========================================================================
     
     try:
