@@ -43,7 +43,7 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade Risk & Multi-Stage Zone Recovery Parameters ---
+# --- Trade Risk & Multi-Stage Recovery Parameters ---
 TRADE_VOLUME = 0.20                 # Initial (original) trade volume: 0.20 lots before any hedge
 SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
 MAX_LOSS_USD = 150.0                # Hard Loss Floor: closes all positions if total basket loss reaches -$150
@@ -52,16 +52,40 @@ MAX_LOSS_USD = 150.0                # Hard Loss Floor: closes all positions if t
 # SINGLE TRADE ONLY (original 0.20 lot, no hedge open):
 #   Trailing profit lock. Tracks the highest floating profit (peak). Once the peak has
 #   reached at least TRAILING_PROFIT_DROP_USD, the trade is closed as soon as profit
-#   falls TRAILING_PROFIT_DROP_USD below the peak (e.g. peak +$85 -> closes at +$55).
+#   falls TRAILING_PROFIT_DROP_USD below the peak (e.g. peak +$85 -> closes at +$65).
 #   The +$2.50 basket target does NOT apply to the single trade.
-TRAILING_PROFIT_DROP_USD = 30.00
+TRAILING_PROFIT_DROP_USD = 20.00
 
 # HEDGED BASKET ONLY (original 0.20 + first hedge 0.40 and beyond):
 #   Closes ALL trades the moment the combined net P&L reaches this value.
 HEDGE_TARGET_PROFIT_USD = 2.50
 
-# --- Multi-Trade Hedging (Zone Recovery) Settings ---
-HEDGE_TRIGGER_LOSS_USD = -70.00     # First hedge (0.40) opens when original 0.20 trade reaches -$70.00
+# --- Multi-Trade Hedging (Basket -$70 Recovery) Settings ---
+# EVERY hedge opens when the TOTAL basket P&L (sum of all open trades) is at -$70:
+#   Level 1 (0.20) alone reaches -$70            -> Level 2 hedge (0.40) opens
+#   Level 1 + Level 2 together reach -$70        -> Level 3 hedge (0.80) opens
+#   Level 1 + 2 + 3 together reach -$70          -> Level 4 hedge (1.60) opens ... and so on.
+# Each hedge is opposite to the previous trade and double its size.
+#
+# Wait between hedges: after a hedge opens, the bot waits HEDGE_WAIT_SECONDS (10 minutes).
+# After the wait, if the basket is STILL at -$70 or worse, the next hedge opens and the
+# 10-minute wait starts again. This stops the bot from opening many hedges in one second.
+HEDGE_TRIGGER_LOSS_USD = -70.00     # Basket P&L that opens every hedge
+HEDGE_WAIT_SECONDS = 600            # 10 minutes between hedges
+
+# --- -$150 Basket Loss Protection ---
+# 1. Broker-side basket stop: the bot calculates the exact gold price at which the WHOLE
+#    basket equals -$150 and puts SL/TP on EVERY open position at that price. The broker
+#    then closes the basket even if the bot freezes, lags or loses connection.
+# 2. Hedge room check: a new hedge is only opened if, after paying its spread, the basket
+#    still has at least HEDGE_MIN_CUSHION_USD left before -$150 AND gold must move at least
+#    HEDGE_MIN_ROOM_PRICE dollars to reach -$150. Bigger hedges that would push the basket
+#    straight into the -$150 stop are refused.
+# 3. If the broker closes some basket positions (SL/TP), the bot closes the rest at once.
+# 4. Software hard stop (MAX_LOSS_USD) stays as the last line of defence.
+BROKER_BASKET_STOP = True
+HEDGE_MIN_CUSHION_USD = 30.00       # Min $ left between basket (after spread) and -$150 to allow a hedge
+HEDGE_MIN_ROOM_PRICE = 0.80         # Min gold price move ($) from new basket to -$150 to allow a hedge
 MAX_HEDGES = 20                     # Number of hedges allowed after the original trade
 MAX_HEDGE_LEVELS = MAX_HEDGES + 1   # Total levels: original trade + hedges
 
@@ -79,6 +103,7 @@ def get_volume_for_level(level):
         return HEDGE_LOT_SIZES[idx]
     return round(TRADE_VOLUME * (2 ** idx), 2)
 
+
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
 last_processed_candle_time = None   # Timestamp of last processed candle shift 1
@@ -87,6 +112,10 @@ last_logged_no_signal_candle = None # Timestamp of last logged candle for no-sig
 last_status_log_time = 0            # Timestamp of periodic open trade status log
 trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
 phase1_announced = False            # Prevents Phase 1 banner from logging every second
+last_hedge_time = None              # time.time() of the last hedge opened (None = no hedge yet in this run)
+basket_tickets = None               # Tickets of the basket seen on the previous loop (detects broker SL/TP closes)
+broker_stop_state = None            # (tickets, stop_price) last sent to the broker
+hedge_blocked_notified = None       # Level for which a "hedge blocked" alert was already sent
 
 # --- Limit Monitoring & Safety State Flags ---
 limit_notified_daily = False        # Has daily loss limit been notified?
@@ -579,27 +608,201 @@ def check_challenge_limits(symbol):
     elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False
 
+def get_net_volume(positions):
+    """Net lots of the basket: BUY volume minus SELL volume."""
+    return sum(p.volume if p.type == mt5.POSITION_TYPE_BUY else -p.volume for p in positions)
+
+def get_contract_size(symbol_info):
+    return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
+
+def get_basket_stop_price(positions, basket_pnl, tick, contract_size):
+    """
+    Gold price at which the whole basket equals -MAX_LOSS_USD.
+    Basket P&L changes by (net lots x contract size) dollars per $1 of gold,
+    so: stop = mid + (-MAX_LOSS - current P&L) / (net lots x contract size).
+    Returns None if the basket is perfectly flat (net lots = 0).
+    """
+    net = get_net_volume(positions)
+    if abs(net) < 1e-9:
+        return None
+    mid = (tick.bid + tick.ask) / 2.0
+    return mid + (-MAX_LOSS_USD - basket_pnl) / (net * contract_size)
+
+def sync_broker_basket_stop(symbol, positions, basket_pnl):
+    """Puts SL/TP on every basket position at the price where the basket = -$150."""
+    global broker_stop_state
+    if not BROKER_BASKET_STOP or not positions:
+        return
+
+    symbol_info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if not symbol_info or not tick:
+        return
+
+    stop_price = get_basket_stop_price(positions, basket_pnl, tick, get_contract_size(symbol_info))
+    if stop_price is None:
+        return
+
+    digits = getattr(symbol_info, 'digits', 2)
+    point = getattr(symbol_info, 'point', 0.01)
+    stop_price = round(stop_price, digits)
+    tickets = tuple(sorted(p.ticket for p in positions))
+
+    # Only resend when the basket changed or the stop moved by more than $0.10 (swap/spread drift)
+    if broker_stop_state and broker_stop_state[0] == tickets and abs(broker_stop_state[1] - stop_price) < 0.10:
+        return
+
+    min_dist = (getattr(symbol_info, 'trade_stops_level', 0) or 0) * point
+    all_ok = True
+    for p in positions:
+        sl, tp = 0.0, 0.0
+        if p.type == mt5.POSITION_TYPE_BUY:
+            if stop_price < tick.bid - min_dist:
+                sl = stop_price      # basket stop below price -> SL on BUY
+            elif stop_price > tick.bid + min_dist:
+                tp = stop_price      # basket stop above price -> TP on BUY
+        else:
+            if stop_price > tick.ask + min_dist:
+                sl = stop_price      # basket stop above price -> SL on SELL
+            elif stop_price < tick.ask - min_dist:
+                tp = stop_price      # basket stop below price -> TP on SELL
+
+        if sl == 0.0 and tp == 0.0:
+            all_ok = False           # too close to price; software hard stop covers it
+            continue
+        if round(p.sl, digits) == sl and round(p.tp, digits) == tp:
+            continue
+
+        res = mt5.order_send({
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": symbol,
+            "position": p.ticket,
+            "sl": float(sl),
+            "tp": float(tp),
+            "magic": MAGIC_NUMBER,
+        })
+        if not res or res.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+            all_ok = False
+            err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
+            logger.warning(f"⚠️ Could not set broker basket stop on #{p.ticket}: {err}")
+
+    if all_ok:
+        broker_stop_state = (tickets, stop_price)
+        logger.info(
+            f"🛡️ Broker basket stop set @ {stop_price:.{digits}f} on {len(positions)} position(s) "
+            f"(basket = -${MAX_LOSS_USD:.2f} at that price)"
+        )
+
+def hedge_has_room(symbol, positions, basket_pnl, direction, volume):
+    """
+    Checks that opening this hedge cannot by itself push the basket to -$150:
+    - basket after paying the hedge's spread must stay HEDGE_MIN_CUSHION_USD above -$150
+    - gold must move at least HEDGE_MIN_ROOM_PRICE to reach -$150 with the new net exposure
+    Returns (allowed, reason).
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if not symbol_info or not tick:
+        return False, "no symbol/tick data"
+
+    contract = get_contract_size(symbol_info)
+    spread_cost = volume * contract * (tick.ask - tick.bid)
+    projected_pnl = basket_pnl - spread_cost
+    cushion = projected_pnl + MAX_LOSS_USD
+
+    if cushion < HEDGE_MIN_CUSHION_USD:
+        return False, (f"basket after spread ${projected_pnl:.2f} leaves only ${cushion:.2f} "
+                       f"before -${MAX_LOSS_USD:.2f} (need ${HEDGE_MIN_CUSHION_USD:.2f})")
+
+    new_net = get_net_volume(positions) + (volume if direction == "BUY" else -volume)
+    if abs(new_net) > 1e-9:
+        room = cushion / (abs(new_net) * contract)
+        if room < HEDGE_MIN_ROOM_PRICE:
+            return False, (f"net {new_net:+.2f} lots -> only ${room:.2f} gold move to -${MAX_LOSS_USD:.2f} "
+                           f"(need ${HEDGE_MIN_ROOM_PRICE:.2f})")
+
+    return True, f"spread cost ${spread_cost:.2f}, ${cushion:.2f} left before -${MAX_LOSS_USD:.2f}"
+
+def try_open_hedge(symbol, positions, basket_pnl, next_level, direction, volume, trigger_reason):
+    """Opens a hedge only if hedge_has_room() allows it. Returns True if the hedge was placed."""
+    global hedge_blocked_notified
+    allowed, reason = hedge_has_room(symbol, positions, basket_pnl, direction, volume)
+    if not allowed:
+        if hedge_blocked_notified != next_level:
+            hedge_blocked_notified = next_level
+            logger.warning(f"🚫 Level {next_level} hedge BLOCKED: {reason}")
+            send_push_notification(
+                f"🚫 Level {next_level} Hedge Blocked",
+                f"{symbol} {direction} {volume} lots not opened: {reason}. "
+                f"Basket waits for +${HEDGE_TARGET_PROFIT_USD:.2f} or -${MAX_LOSS_USD:.2f} stop."
+            )
+        return False
+
+    res, _ = open_recovery_hedge_level(
+        symbol=symbol,
+        next_level=next_level,
+        direction=direction,
+        volume=volume,
+        trigger_reason=f"{trigger_reason} | {reason}"
+    )
+    return bool(res)
+
+def reset_basket_state():
+    global last_hedge_time, basket_tickets, broker_stop_state, hedge_blocked_notified
+    trade_peak_profit.clear()
+    last_hedge_time = None
+    basket_tickets = None
+    broker_stop_state = None
+    hedge_blocked_notified = None
+
 def manage_active_trade(symbol):
     """
     Manages active trade(s):
-    - SINGLE TRADE (original 0.20 only): trailing profit lock using TRAILING_PROFIT_DROP_USD.
-      The +$2.50 basket target is NOT used here. If loss reaches HEDGE_TRIGGER_LOSS_USD,
+    - SINGLE TRADE (original 0.20 only): trailing profit lock using TRAILING_PROFIT_DROP_USD ($20).
+      The +$2.50 basket target is NOT used here. If loss reaches -$70,
       the first hedge (0.40 lots, opposite direction) is opened.
     - HEDGED BASKET (2+ trades): closes ALL trades when net P&L >= HEDGE_TARGET_PROFIT_USD.
-      Trailing lock is NOT used here. Further hedges double in size at zone boundaries.
-    - Hard loss stop (MAX_LOSS_USD) applies in both modes.
+      Each further hedge opens when the SUM of all open trades is at -$70 or worse AND at
+      least 10 minutes passed since the last hedge, opposite to the last trade, double size.
+    - -$150 protection: broker-side basket stop on every position, hedge room check,
+      partial-close detection and the software hard stop (MAX_LOSS_USD).
     Returns True if trade(s) active, False if all trades closed.
     """
-    global last_close_time, last_status_log_time, trade_peak_profit
+    global last_close_time, last_status_log_time, last_hedge_time, basket_tickets
 
     positions = get_active_positions(symbol)
     if not positions:
-        trade_peak_profit.clear()
+        if basket_tickets:
+            # Whole basket was closed by the broker (basket stop SL/TP hit)
+            logger.warning("🛡️ Basket closed by broker-side stop.")
+            send_push_notification(
+                "🛡️ Broker Basket Stop Hit",
+                f"All {symbol} positions were closed by the broker at the -${MAX_LOSS_USD:.0f} basket stop."
+            )
+            last_close_time = time.time()
+        reset_basket_state()
         return False
 
     total_basket_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
+    current_tickets = set(p.ticket for p in positions)
 
-    # 1. Hard Downside Watchdog (applies to single trade AND hedged basket)
+    # 1a. Broker closed PART of the basket (SL/TP hit on some positions) -> close the rest now
+    if basket_tickets and not basket_tickets.issubset(current_tickets):
+        logger.warning(
+            f"🛡️ {len(basket_tickets - current_tickets)} basket position(s) closed by broker stop. "
+            f"Closing remaining {len(positions)} position(s)..."
+        )
+        send_push_notification(
+            "🛡️ Broker Basket Stop Hit",
+            f"Broker closed part of the {symbol} basket at the -${MAX_LOSS_USD:.0f} stop. Closing the rest."
+        )
+        close_all_positions(symbol, "Broker basket stop (partial close)")
+        reset_basket_state()
+        last_close_time = time.time()
+        return False
+    basket_tickets = current_tickets
+
+    # 1b. Software Hard Downside Watchdog (applies to single trade AND hedged basket)
     if MAX_LOSS_USD > 0 and total_basket_pnl <= -MAX_LOSS_USD:
         logger.warning(f"🛑 Hard Loss Stop Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing all positions...")
         send_push_notification(
@@ -607,9 +810,12 @@ def manage_active_trade(symbol):
             f"Basket loss reached -${abs(total_basket_pnl):.2f} (Limit: -${MAX_LOSS_USD:.2f}). Closed all positions immediately!"
         )
         close_all_positions(symbol, f"Watchdog Max Loss -${abs(total_basket_pnl):.2f}")
-        trade_peak_profit.clear()
+        reset_basket_state()
         last_close_time = time.time()
         return False
+
+    # 1c. Keep the broker-side -$150 basket stop up to date on every position
+    sync_broker_basket_stop(symbol, positions, total_basket_pnl)
 
     # =====================================================================
     # 2. SINGLE TRADE MODE (original 0.20 lot only) -> TRAILING PROFIT LOCK
@@ -623,8 +829,8 @@ def manage_active_trade(symbol):
         peak_pnl = max(trade_peak_profit.get(ticket, current_pnl), current_pnl)
         trade_peak_profit[ticket] = peak_pnl
 
-        # Trailing lock: active once peak profit reached at least $30.
-        # Closes when profit falls $30 below the highest point reached.
+        # Trailing lock: active once peak profit reached at least $20.
+        # Closes when profit falls $20 below the highest point reached.
         trailing_drop = peak_pnl - current_pnl
         if (peak_pnl >= TRAILING_PROFIT_DROP_USD
                 and trailing_drop >= TRAILING_PROFIT_DROP_USD
@@ -638,7 +844,7 @@ def manage_active_trade(symbol):
                 f"Level 1 closed at +${current_pnl:.2f} (pulled back ${trailing_drop:.2f} from peak +${peak_pnl:.2f}) on {symbol}!"
             )
             close_all_positions(symbol, f"Trailing Profit Lock +${current_pnl:.2f}")
-            trade_peak_profit.clear()
+            reset_basket_state()
             last_close_time = time.time()
             return False
 
@@ -646,13 +852,9 @@ def manage_active_trade(symbol):
         if current_pnl <= HEDGE_TRIGGER_LOSS_USD:
             hedge_dir = "SELL" if pos.type == mt5.POSITION_TYPE_BUY else "BUY"
             hedge_vol = get_volume_for_level(2)  # 0.40 when TRADE_VOLUME = 0.20
-            open_recovery_hedge_level(
-                symbol=symbol,
-                next_level=2,
-                direction=hedge_dir,
-                volume=hedge_vol,
-                trigger_reason=f"Level 1 loss ${current_pnl:.2f} <= ${HEDGE_TRIGGER_LOSS_USD:.2f}"
-            )
+            if try_open_hedge(symbol, positions, current_pnl, 2, hedge_dir, hedge_vol,
+                              f"Level 1 loss ${current_pnl:.2f} <= ${HEDGE_TRIGGER_LOSS_USD:.2f}"):
+                last_hedge_time = time.time()   # Level 3 waits at least 10 minutes
             return True
 
         # Periodic status log for single trade
@@ -685,22 +887,18 @@ def manage_active_trade(symbol):
             f"Hedged basket closed in profit: +${total_basket_pnl:.2f} across {len(positions)} trades on {symbol}!"
         )
         close_all_positions(symbol, f"Basket Target Profit +${total_basket_pnl:.2f}")
-        trade_peak_profit.clear()
+        reset_basket_state()
         last_close_time = time.time()
         return False
 
     current_level = len(positions)
-
-    pos_1 = positions[0]
-    pos_2 = positions[1]
-    zone_high = max(pos_1.price_open, pos_2.price_open)
-    zone_low = min(pos_1.price_open, pos_2.price_open)
 
     latest_pos = positions[-1]
     latest_dir = "BUY" if latest_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
     next_level = current_level + 1
     next_dir = "SELL" if latest_dir == "BUY" else "BUY"
     next_vol = get_volume_for_level(next_level)
+    next_trigger = HEDGE_TRIGGER_LOSS_USD
 
     # Max level reached -> only wait for basket target or hard stop
     if MAX_HEDGE_LEVELS > 0 and current_level >= MAX_HEDGE_LEVELS:
@@ -713,42 +911,34 @@ def manage_active_trade(symbol):
             )
         return True
 
-    # Zone boundary triggers for next hedge level
-    tick = mt5.symbol_info_tick(symbol)
-    if tick:
-        if next_dir == "BUY" and tick.ask >= zone_high:
-            open_recovery_hedge_level(
-                symbol=symbol,
-                next_level=next_level,
-                direction="BUY",
-                volume=next_vol,
-                trigger_reason=f"Price {tick.ask:.2f} crossed Zone High {zone_high:.2f}"
-            )
-            return True
-        elif next_dir == "SELL" and tick.bid <= zone_low:
-            open_recovery_hedge_level(
-                symbol=symbol,
-                next_level=next_level,
-                direction="SELL",
-                volume=next_vol,
-                trigger_reason=f"Price {tick.bid:.2f} crossed Zone Low {zone_low:.2f}"
-            )
-            return True
+    # Bot restarted with a hedged basket already open -> start the 10-minute wait from now
+    if last_hedge_time is None:
+        last_hedge_time = time.time()
+
+    # 10-minute wait between hedges
+    wait_left = HEDGE_WAIT_SECONDS - (time.time() - last_hedge_time)
+
+    # Wait over and basket (sum of all open trades) at -$70 or worse -> open next hedge
+    if wait_left <= 0 and total_basket_pnl <= next_trigger:
+        if try_open_hedge(symbol, positions, total_basket_pnl, next_level, next_dir, next_vol,
+                          f"Basket of {current_level} trades at ${total_basket_pnl:.2f} <= ${next_trigger:.2f}"):
+            last_hedge_time = time.time()   # start the next 10-minute wait
+        return True
 
     # Periodic status log for hedged basket
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
-        trigger_target = f"Zone High {zone_high:.2f}" if next_dir == "BUY" else f"Zone Low {zone_low:.2f}"
-        if tick:
-            cur_price = tick.ask if next_dir == "BUY" else tick.bid
-        else:
-            cur_price = 0.0
+        arm_state = (
+            f"waiting {int(wait_left // 60)}m {int(wait_left % 60)}s, then opens if basket <= ${next_trigger:.2f}"
+            if wait_left > 0
+            else f"READY, opens when basket <= ${next_trigger:.2f}"
+        )
         logger.info(
             f"⚖️ Hedged Basket [Level {current_level}, {len(positions)} trades] | "
-            f"Zone: [{zone_low:.2f} - {zone_high:.2f}] | "
             f"Net P&L: ${total_basket_pnl:.2f} / Target: +${HEDGE_TARGET_PROFIT_USD:.2f} | "
-            f"Next: L{next_level} {next_dir} {next_vol}l @ {trigger_target} (Current: {cur_price:.2f})"
+            f"Next: L{next_level} {next_dir} {next_vol}l ({arm_state}) | "
+            f"Hard stop: -${MAX_LOSS_USD:.2f}"
         )
 
     return True
@@ -768,15 +958,18 @@ def run_bot():
         return
 
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Multi-Stage Zone Recovery Bot")
+    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Multi-Stage Basket Recovery Bot")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
     logger.info(f"Original Trade: {TRADE_VOLUME} lots")
     logger.info(f"Single Trade Exit: Trailing lock, closes when profit drops ${TRAILING_PROFIT_DROP_USD:.2f} from peak")
-    logger.info(f"First Hedge: Loss <= ${HEDGE_TRIGGER_LOSS_USD:.2f} opens Level 2 ({get_volume_for_level(2)} lots, opposite direction)")
+    logger.info(f"Hedge Trigger: every hedge opens when basket (sum of all trades) <= ${HEDGE_TRIGGER_LOSS_USD:.2f}")
+    logger.info(f"Hedge Wait: {HEDGE_WAIT_SECONDS // 60} minutes after each hedge before checking the basket again")
     logger.info(f"Hedged Basket Exit: Close ALL trades when Net PnL >= +${HEDGE_TARGET_PROFIT_USD:.2f}")
     logger.info(f"Hedge Progression: {HEDGE_LOT_SIZES}")
     logger.info(f"Max Hedges: {MAX_HEDGES} (Levels incl. original: {MAX_HEDGE_LEVELS})")
     logger.info(f"Hard Loss Stop: Close ALL trades at basket loss -${MAX_LOSS_USD:.2f}")
+    logger.info(f"Broker Basket Stop: {'ON' if BROKER_BASKET_STOP else 'OFF'} (SL/TP on every position at the -${MAX_LOSS_USD:.0f} price)")
+    logger.info(f"Hedge Room Check: need ${HEDGE_MIN_CUSHION_USD:.0f} left after spread and >= ${HEDGE_MIN_ROOM_PRICE:.2f} gold move to -${MAX_LOSS_USD:.0f}")
     logger.info(f"⚠️ MONITORING (alerts only):")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
