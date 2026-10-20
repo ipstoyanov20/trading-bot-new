@@ -1,4 +1,5 @@
 import os
+import json
 import MetaTrader5 as mt5
 import time
 import logging
@@ -43,65 +44,25 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade Risk & Multi-Stage Recovery Parameters ---
-TRADE_VOLUME = 0.20                 # Initial (original) trade volume: 0.20 lots before any hedge
-SL_POINTS = 0                       # Hard Stop Loss: Disabled (0 points)
-MAX_LOSS_USD = 150.0                # Hard Loss Floor: closes all positions if total basket loss reaches -$150
+# --- Trade Risk ---
+TRADE_VOLUME = 0.20                 # Trade volume: 0.20 lots, one trade at a time (no hedging)
 
-# --- Exit Rules ---
-# SINGLE TRADE ONLY (original 0.20 lot, no hedge open):
-#   Trailing profit lock. Tracks the highest floating profit (peak). Once the peak has
-#   reached at least TRAILING_PROFIT_DROP_USD, the trade is closed as soon as profit
-#   falls TRAILING_PROFIT_DROP_USD below the peak (e.g. peak +$85 -> closes at +$65).
-#   The +$2.50 basket target does NOT apply to the single trade.
+# Stop loss on EVERY trade: a broker-side SL at the price where this trade loses exactly $30.
+# It is sent with the order and corrected to the real fill price right after. The bot also
+# closes the trade itself at -$30 as a backup (e.g. if the broker refused the SL).
+STOP_LOSS_USD = 30.00
+
+# --- Exit Rule: Persistent Trailing Profit Lock ---
+# Tracks the highest floating profit (peak). Once the peak reaches TRAILING_PROFIT_DROP_USD,
+# the trade is closed when profit falls TRAILING_PROFIT_DROP_USD below the peak
+# (e.g. peak +$85 -> closes at +$65).
+# Persistent:
+#   1. The broker-side SL is moved up to the locked profit level as the peak grows (it never
+#      moves back), so the lock holds at the broker even if the bot stops or disconnects.
+#   2. The peak is saved to TRAILING_STATE_FILE, so a bot restart continues from the same peak.
 TRAILING_PROFIT_DROP_USD = 20.00
-
-# HEDGED BASKET ONLY (original 0.20 + first hedge 0.40 and beyond):
-#   Closes ALL trades the moment the combined net P&L reaches this value.
-HEDGE_TARGET_PROFIT_USD = 2.50
-
-# --- Multi-Trade Hedging (Basket -$70 Recovery) Settings ---
-# EVERY hedge opens when the TOTAL basket P&L (sum of all open trades) is at -$70:
-#   Level 1 (0.20) alone reaches -$70            -> Level 2 hedge (0.40) opens
-#   Level 1 + Level 2 together reach -$70        -> Level 3 hedge (0.80) opens
-#   Level 1 + 2 + 3 together reach -$70          -> Level 4 hedge (1.60) opens ... and so on.
-# Each hedge is opposite to the previous trade and double its size.
-#
-# Wait between hedges: after a hedge opens, the bot waits HEDGE_WAIT_SECONDS (10 minutes).
-# After the wait, if the basket is STILL at -$70 or worse, the next hedge opens and the
-# 10-minute wait starts again. This stops the bot from opening many hedges in one second.
-HEDGE_TRIGGER_LOSS_USD = -70.00     # Basket P&L that opens every hedge
-HEDGE_WAIT_SECONDS = 600            # 10 minutes between hedges
-
-# --- -$150 Basket Loss Protection ---
-# 1. Broker-side basket stop: the bot calculates the exact gold price at which the WHOLE
-#    basket equals -$150 and puts SL/TP on EVERY open position at that price. The broker
-#    then closes the basket even if the bot freezes, lags or loses connection.
-# 2. Hedge room check: a new hedge is only opened if, after paying its spread, the basket
-#    still has at least HEDGE_MIN_CUSHION_USD left before -$150 AND gold must move at least
-#    HEDGE_MIN_ROOM_PRICE dollars to reach -$150. Bigger hedges that would push the basket
-#    straight into the -$150 stop are refused.
-# 3. If the broker closes some basket positions (SL/TP), the bot closes the rest at once.
-# 4. Software hard stop (MAX_LOSS_USD) stays as the last line of defence.
-BROKER_BASKET_STOP = True
-HEDGE_MIN_CUSHION_USD = 30.00       # Min $ left between basket (after spread) and -$150 to allow a hedge
-HEDGE_MIN_ROOM_PRICE = 0.80         # Min gold price move ($) from new basket to -$150 to allow a hedge
-MAX_HEDGES = 20                     # Number of hedges allowed after the original trade
-MAX_HEDGE_LEVELS = MAX_HEDGES + 1   # Total levels: original trade + hedges
-
-# Lot sizing progression: each hedge is DOUBLE the previous trade:
-# Level 1: 0.20 (Original trade)
-# Level 2: 0.40 (1st hedge)
-# Level 3: 0.80 (2nd hedge)
-# Level 4: 1.60 (3rd hedge) ...
-HEDGE_LOT_SIZES = [round(TRADE_VOLUME * (2 ** i), 2) for i in range(MAX_HEDGE_LEVELS)]
-
-def get_volume_for_level(level):
-    """Returns lot size for given recovery level (1-indexed), doubling each level."""
-    idx = level - 1
-    if idx < len(HEDGE_LOT_SIZES):
-        return HEDGE_LOT_SIZES[idx]
-    return round(TRADE_VOLUME * (2 ** idx), 2)
+TRAILING_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trailing_state.json")
+SL_MIN_STEP_PRICE = 0.05            # Only move the broker SL when it improves by at least this much
 
 
 # --- Bot Runtime State ---
@@ -110,12 +71,11 @@ last_processed_candle_time = None   # Timestamp of last processed candle shift 1
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
-trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
+trade_peak_profit = {}              # Peak floating profit per ticket: {ticket: float} (saved to disk)
+known_tickets = set()               # Tickets seen on the previous loop (detects broker SL closes)
+armed_notified = set()              # Tickets whose "trailing armed" alert was already sent
+sl_warn_time = {}                   # Last time an "SL could not be set" warning was logged per ticket
 phase1_announced = False            # Prevents Phase 1 banner from logging every second
-last_hedge_time = None              # time.time() of the last hedge opened (None = no hedge yet in this run)
-basket_tickets = None               # Tickets of the basket seen on the previous loop (detects broker SL/TP closes)
-broker_stop_state = None            # (tickets, stop_price) last sent to the broker
-hedge_blocked_notified = None       # Level for which a "hedge blocked" alert was already sent
 
 # --- Limit Monitoring & Safety State Flags ---
 limit_notified_daily = False        # Has daily loss limit been notified?
@@ -188,6 +148,42 @@ def send_push_notification(title, message):
 # Backward-compatible alias
 send_mt5_notification = send_push_notification
 
+# =====================================================================
+# Persistent trailing state (peak profit per ticket, survives restarts)
+# =====================================================================
+def load_trailing_state():
+    """Loads saved peaks from TRAILING_STATE_FILE into trade_peak_profit."""
+    trade_peak_profit.clear()
+    try:
+        with open(TRAILING_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for ticket, peak in data.items():
+            trade_peak_profit[int(ticket)] = float(peak)
+        if trade_peak_profit:
+            logger.info(f"💾 Loaded trailing peaks from {TRAILING_STATE_FILE}: {trade_peak_profit}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"⚠️ Could not read {TRAILING_STATE_FILE}: {e}. Starting with no saved peaks.")
+
+def save_trailing_state():
+    """Writes trade_peak_profit to disk atomically (temp file + replace)."""
+    try:
+        tmp = TRAILING_STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({str(t): round(p, 2) for t, p in trade_peak_profit.items()}, f)
+        os.replace(tmp, TRAILING_STATE_FILE)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not save {TRAILING_STATE_FILE}: {e}")
+
+def forget_ticket(ticket):
+    """Removes all per-trade state once a trade is closed."""
+    known_tickets.discard(ticket)
+    armed_notified.discard(ticket)
+    sl_warn_time.pop(ticket, None)
+    if trade_peak_profit.pop(ticket, None) is not None:
+        save_trailing_state()
+
 def get_filling_type(symbol):
     """Dynamically determines the correct execution filling mode supported by the broker."""
     symbol_info = mt5.symbol_info(symbol)
@@ -214,6 +210,34 @@ def normalize_volume(symbol_info, volume):
     if 0 < vol < vmin:
         vol = vmin
     return vol
+
+def get_contract_size(symbol_info):
+    return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
+
+def usd_to_price(usd, volume, contract_size):
+    """Gold price move ($) that changes a position of `volume` lots by `usd` dollars."""
+    return usd / (volume * contract_size)
+
+def stop_loss_price(is_buy, open_price, volume, contract_size):
+    """Price at which the trade has lost exactly STOP_LOSS_USD."""
+    dist = usd_to_price(STOP_LOSS_USD, volume, contract_size)
+    return open_price - dist if is_buy else open_price + dist
+
+def desired_stop_price(is_buy, open_price, volume, contract_size, peak):
+    """
+    The broker SL this trade should have now:
+    - the -$30 stop loss, or
+    - once the peak reached TRAILING_PROFIT_DROP_USD, the trailing lock (peak - drop), whichever
+      protects more. Returns (stop_price, locked_profit_or_None).
+    """
+    stop = stop_loss_price(is_buy, open_price, volume, contract_size)
+    locked = None
+    if peak >= TRAILING_PROFIT_DROP_USD:
+        locked = peak - TRAILING_PROFIT_DROP_USD
+        move = usd_to_price(locked, volume, contract_size)
+        lock_stop = open_price + move if is_buy else open_price - move
+        stop = max(stop, lock_stop) if is_buy else min(stop, lock_stop)
+    return stop, locked
 
 def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     """
@@ -284,8 +308,11 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
 
     return None, candle_time
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comment="BB_Single", notify_on_error=True):
-    """Places an order on MT5 with filling mode fallback and returns (result, fill_price)."""
+def place_order_safe(symbol, order_type, volume, tp_points=0, sl_usd=0.0, comment="BB_Single", notify_on_error=True):
+    """
+    Places an order on MT5 with filling mode fallback and returns (result, fill_price).
+    sl_usd > 0 puts a stop loss at the price where this order loses sl_usd dollars.
+    """
     action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -314,17 +341,18 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
             )
         return None, 0.0
 
-    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+    is_buy = order_type == mt5.ORDER_TYPE_BUY
+    price = tick.ask if is_buy else tick.bid
     digits = getattr(symbol_info, 'digits', 2)
     point = getattr(symbol_info, 'point', 0.01)
 
     tp = 0.0
     if tp_points > 0:
-        tp = round(price + (tp_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price - (tp_points * point), digits)
+        tp = round(price + (tp_points * point), digits) if is_buy else round(price - (tp_points * point), digits)
 
     sl = 0.0
-    if sl_points > 0:
-        sl = round(price - (sl_points * point), digits) if order_type == mt5.ORDER_TYPE_BUY else round(price + (sl_points * point), digits)
+    if sl_usd > 0:
+        sl = round(stop_loss_price(is_buy, price, volume, get_contract_size(symbol_info)), digits)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -352,7 +380,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
         request["type_filling"] = mode
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | Hard SL: {sl} | Filling: {mode}")
+            logger.info(f"✅ {action_name} Placed ({comment}) | Vol: {volume} | Price: {price} | SL: {sl} | Filling: {mode}")
             return res, price
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue
@@ -369,10 +397,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_points=0, comme
     return None, 0.0
 
 def get_active_positions(symbol):
-    """
-    Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically.
-    Position 0 is the original trade; subsequent positions are recovery hedge levels.
-    """
+    """Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically."""
     positions = mt5.positions_get(symbol=symbol)
     if not positions:
         return []
@@ -425,33 +450,33 @@ def close_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
-def close_all_positions(symbol, reason=""):
-    """
-    Closes all open positions belonging to this bot with retries.
-    Closes highest profit trades first to secure profits immediately.
-    """
+def close_trade(symbol, position, reason):
+    """Closes one trade with retries. Returns True once it is gone."""
     for attempt in range(5):
-        positions = get_active_positions(symbol)
-        if not positions:
+        still_open = [p for p in get_active_positions(symbol) if p.ticket == position.ticket]
+        if not still_open:
             return True
-        logger.info(f"Closing {len(positions)} positions ({reason}) [Attempt {attempt + 1}/5]...")
-        sorted_pos = sorted(positions, key=lambda p: (p.profit + p.swap), reverse=True)
-        for p in sorted_pos:
-            close_position(symbol, p)
+        logger.info(f"Closing #{position.ticket} ({reason}) [Attempt {attempt + 1}/5]...")
+        close_position(symbol, still_open[0])
         time.sleep(0.2)
-        if not get_active_positions(symbol):
-            logger.info("✅ All positions successfully closed.")
-            return True
 
-    remaining = get_active_positions(symbol)
-    if remaining:
-        logger.warning(f"⚠️ {len(remaining)} positions remain open after 5 close attempts.")
+    if any(p.ticket == position.ticket for p in get_active_positions(symbol)):
         send_push_notification(
             "⚠️ Close Failed",
-            f"{len(remaining)} positions still open on {symbol} after 5 attempts ({reason}). Check MT5 now!"
+            f"#{position.ticket} still open on {symbol} after 5 attempts ({reason}). Check MT5 now!"
         )
         return False
     return True
+
+def get_closed_trade_pnl(ticket):
+    """Realized P&L of a closed position (all its exit deals), or None if not in history yet."""
+    deals = mt5.history_deals_get(position=ticket)
+    if not deals:
+        return None
+    exits = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+    if not exits:
+        return None
+    return sum(d.profit + d.swap + getattr(d, 'commission', 0.0) for d in exits)
 
 def get_daily_realized_pnl(magic=MAGIC_NUMBER):
     """Calculates total closed PnL today (since 00:00 local time) for this bot's magic number."""
@@ -484,83 +509,32 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
     return total_pnl
 
 def open_single_trade(symbol, direction):
-    """Opens the original 0.20 lot trade based on Bollinger Bands entry signal."""
+    """Opens the 0.20 lot trade with a -$30 stop loss, based on the Bollinger Bands signal."""
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}_L1"
+    comment = f"BB_{direction}"
 
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
         volume=TRADE_VOLUME,
-        tp_points=0,                 # Managed by trailing profit lock
-        sl_points=SL_POINTS,         # 0 = Disabled
+        tp_points=0,                 # Exit is the trailing profit lock
+        sl_usd=STOP_LOSS_USD,        # -$30 stop loss
         comment=comment
     )
 
     if res:
         logger.info(
-            f"🚀 Level 1 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"Trailing Lock: close when profit drops ${TRAILING_PROFIT_DROP_USD:.2f} from peak | "
-            f"Hedge Trigger: <= ${HEDGE_TRIGGER_LOSS_USD:.2f}"
+            f"🚀 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
+            f"Stop Loss: -${STOP_LOSS_USD:.2f} | "
+            f"Trailing Lock: arms at +${TRAILING_PROFIT_DROP_USD:.2f}, closes ${TRAILING_PROFIT_DROP_USD:.2f} below peak"
         )
         send_push_notification(
-            f"🟢 Level 1 {direction} Placed",
+            f"🟢 {direction} Placed",
             f"{SYMBOL} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | "
-            f"Trailing: -${TRAILING_PROFIT_DROP_USD:.0f} from peak | Hedge at ${HEDGE_TRIGGER_LOSS_USD:.0f}"
+            f"SL -${STOP_LOSS_USD:.0f} | Trailing -${TRAILING_PROFIT_DROP_USD:.0f} from peak"
         )
         return res, fill_price
     return None, 0.0
-
-hedge_order_in_progress = False
-
-def open_recovery_hedge_level(symbol, next_level, direction, volume, trigger_reason=""):
-    """Opens next recovery hedge trade in the sequence with retry protection."""
-    global hedge_order_in_progress
-    if hedge_order_in_progress:
-        return None, 0.0
-
-    hedge_order_in_progress = True
-    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_Hedge_L{next_level}"
-
-    logger.info(
-        f"🚨 Triggering Level {next_level} Recovery Hedge ({trigger_reason}) | "
-        f"Opening {direction} {volume} lots on {symbol}..."
-    )
-
-    try:
-        for attempt in range(3):
-            res, fill_price = place_order_safe(
-                symbol=symbol,
-                order_type=order_type,
-                volume=volume,
-                tp_points=0,
-                sl_points=0,
-                comment=comment,
-                notify_on_error=False
-            )
-            if res:
-                logger.info(
-                    f"✅ Level {next_level} Hedge Placed: #{getattr(res, 'order', None)} {direction} {volume} lots @ {fill_price:.2f} | "
-                    f"Basket target now active: Net P&L >= +${HEDGE_TARGET_PROFIT_USD:.2f}"
-                )
-                send_push_notification(
-                    f"⚖️ Level {next_level} Hedge Placed",
-                    f"{symbol} {direction} {volume} lots @ {fill_price:.2f} | {trigger_reason} | "
-                    f"Basket target: +${HEDGE_TARGET_PROFIT_USD:.2f}"
-                )
-                return res, fill_price
-            logger.warning(f"⚠️ Level {next_level} hedge attempt {attempt + 1}/3 failed. Retrying in 0.2s...")
-            time.sleep(0.2)
-
-        logger.error(f"❌ Failed to place Level {next_level} hedge trade after 3 attempts!")
-        send_push_notification(
-            f"❌ Level {next_level} Hedge Failed",
-            f"Failed to place {direction} {volume} lots on {symbol} ({comment}) after 3 attempts!"
-        )
-        return None, 0.0
-    finally:
-        hedge_order_in_progress = False
 
 def check_challenge_limits(symbol):
     """MONITORING ONLY - Checks challenge limits and sends notifications. Does NOT stop the bot."""
@@ -570,8 +544,6 @@ def check_challenge_limits(symbol):
     daily_realized_pnl = get_daily_realized_pnl(MAGIC_NUMBER)
     floating_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
     total_today_pnl = daily_realized_pnl + floating_pnl
-
-    total_basket_pnl = floating_pnl
     cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
 
     # 1. Daily Loss Limit (4% = -$200)
@@ -580,7 +552,7 @@ def check_challenge_limits(symbol):
         send_push_notification(
             "⚠️ DAILY LOSS LIMIT ALERT",
             f"Today's P&L: ${total_today_pnl:.2f} has reached the daily limit of -${MAX_DAILY_LOSS_USD:.2f}. "
-            f"Consider closing positions manually to preserve account."
+            f"Consider stopping the bot for today to preserve the account."
         )
     elif total_today_pnl > -MAX_DAILY_LOSS_USD + 25.0 and limit_notified_daily:
         limit_notified_daily = False
@@ -596,356 +568,178 @@ def check_challenge_limits(symbol):
     elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD + 50.0 and limit_notified_total:
         limit_notified_total = False
 
-    # 3. Max Risk / Floating Drawdown Limit (-$150)
-    current_loss = min(total_basket_pnl, total_today_pnl)
+    # 3. Max Risk / Drawdown Limit (-$150)
+    current_loss = min(floating_pnl, total_today_pnl)
     if current_loss <= -MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
         limit_notified_max_risk = True
         send_push_notification(
             f"⚠️ MAX LOSS ALERT (${MAX_RISK_AT_ANY_TIME_USD:.0f})",
-            f"Floating loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f}). "
-            f"Hard loss stop will close the basket at -${MAX_LOSS_USD:.2f}."
+            f"Loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f}). "
+            f"Each trade is capped by its -${STOP_LOSS_USD:.0f} stop loss."
         )
     elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False
 
-def get_net_volume(positions):
-    """Net lots of the basket: BUY volume minus SELL volume."""
-    return sum(p.volume if p.type == mt5.POSITION_TYPE_BUY else -p.volume for p in positions)
-
-def get_contract_size(symbol_info):
-    return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
-
-def get_basket_stop_price(positions, basket_pnl, tick, contract_size):
+def sync_broker_stop(symbol, pos, peak):
     """
-    Gold price at which the whole basket equals -MAX_LOSS_USD.
-    Basket P&L changes by (net lots x contract size) dollars per $1 of gold,
-    so: stop = mid + (-MAX_LOSS - current P&L) / (net lots x contract size).
-    Returns None if the basket is perfectly flat (net lots = 0).
+    Keeps the broker-side SL of one trade at desired_stop_price(): the -$30 stop, raised to the
+    trailing lock once armed. The SL only ever moves in the trade's favour.
+    Returns (stop_price, locked_profit_or_None).
     """
-    net = get_net_volume(positions)
-    if abs(net) < 1e-9:
-        return None
-    mid = (tick.bid + tick.ask) / 2.0
-    return mid + (-MAX_LOSS_USD - basket_pnl) / (net * contract_size)
-
-def sync_broker_basket_stop(symbol, positions, basket_pnl):
-    """Puts SL/TP on every basket position at the price where the basket = -$150."""
-    global broker_stop_state
-    if not BROKER_BASKET_STOP or not positions:
-        return
-
     symbol_info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol)
     if not symbol_info or not tick:
-        return
+        return None, None
 
-    stop_price = get_basket_stop_price(positions, basket_pnl, tick, get_contract_size(symbol_info))
-    if stop_price is None:
-        return
-
+    is_buy = pos.type == mt5.POSITION_TYPE_BUY
     digits = getattr(symbol_info, 'digits', 2)
     point = getattr(symbol_info, 'point', 0.01)
-    stop_price = round(stop_price, digits)
-    tickets = tuple(sorted(p.ticket for p in positions))
+    stop, locked = desired_stop_price(is_buy, pos.price_open, pos.volume, get_contract_size(symbol_info), peak)
+    stop = round(stop, digits)
 
-    # Only resend when the basket changed or the stop moved by more than $0.10 (swap/spread drift)
-    if broker_stop_state and broker_stop_state[0] == tickets and abs(broker_stop_state[1] - stop_price) < 0.10:
-        return
+    # Never loosen: skip unless the new SL is at least SL_MIN_STEP_PRICE better than the current one
+    if pos.sl > 0:
+        improvement = (stop - pos.sl) if is_buy else (pos.sl - stop)
+        if improvement < SL_MIN_STEP_PRICE:
+            return pos.sl, locked
 
+    # The broker refuses an SL closer to the price than its stops level (or on the wrong side)
     min_dist = (getattr(symbol_info, 'trade_stops_level', 0) or 0) * point
-    all_ok = True
-    for p in positions:
-        sl, tp = 0.0, 0.0
-        if p.type == mt5.POSITION_TYPE_BUY:
-            if stop_price < tick.bid - min_dist:
-                sl = stop_price      # basket stop below price -> SL on BUY
-            elif stop_price > tick.bid + min_dist:
-                tp = stop_price      # basket stop above price -> TP on BUY
-        else:
-            if stop_price > tick.ask + min_dist:
-                sl = stop_price      # basket stop above price -> SL on SELL
-            elif stop_price < tick.ask - min_dist:
-                tp = stop_price      # basket stop below price -> TP on SELL
+    valid = stop < tick.bid - min_dist if is_buy else stop > tick.ask + min_dist
+    if not valid:
+        now = time.time()
+        if now - sl_warn_time.get(pos.ticket, 0) >= 30:
+            sl_warn_time[pos.ticket] = now
+            logger.warning(f"⚠️ SL {stop} too close to price for #{pos.ticket}; the bot's own stop covers it.")
+        return pos.sl, locked
 
-        if sl == 0.0 and tp == 0.0:
-            all_ok = False           # too close to price; software hard stop covers it
-            continue
-        if round(p.sl, digits) == sl and round(p.tp, digits) == tp:
-            continue
-
-        res = mt5.order_send({
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": symbol,
-            "position": p.ticket,
-            "sl": float(sl),
-            "tp": float(tp),
-            "magic": MAGIC_NUMBER,
-        })
-        if not res or res.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            all_ok = False
+    res = mt5.order_send({
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": symbol,
+        "position": pos.ticket,
+        "sl": float(stop),
+        "tp": float(pos.tp),
+        "magic": MAGIC_NUMBER,
+    })
+    if not res or res.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
+        now = time.time()
+        if now - sl_warn_time.get(pos.ticket, 0) >= 30:
+            sl_warn_time[pos.ticket] = now
             err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
-            logger.warning(f"⚠️ Could not set broker basket stop on #{p.ticket}: {err}")
+            logger.warning(f"⚠️ Could not set SL {stop} on #{pos.ticket}: {err}")
+        return pos.sl, locked
 
-    if all_ok:
-        broker_stop_state = (tickets, stop_price)
-        logger.info(
-            f"🛡️ Broker basket stop set @ {stop_price:.{digits}f} on {len(positions)} position(s) "
-            f"(basket = -${MAX_LOSS_USD:.2f} at that price)"
-        )
+    # Once armed the lock (>= $0 profit) is always tighter than the -$30 stop
+    what = f"trailing lock +${locked:.2f}" if locked is not None else f"stop loss -${STOP_LOSS_USD:.2f}"
+    logger.info(f"🛡️ Broker SL on #{pos.ticket} set @ {stop:.{digits}f} ({what})")
+    return stop, locked
 
-def hedge_has_room(symbol, positions, basket_pnl, direction, volume):
+def manage_trade(symbol, pos):
     """
-    Checks that opening this hedge cannot by itself push the basket to -$150:
-    - basket after paying the hedge's spread must stay HEDGE_MIN_CUSHION_USD above -$150
-    - gold must move at least HEDGE_MIN_ROOM_PRICE to reach -$150 with the new net exposure
-    Returns (allowed, reason).
+    One trade: -$30 stop loss and persistent trailing profit lock.
+    Returns True while the trade stays open.
     """
-    symbol_info = mt5.symbol_info(symbol)
-    tick = mt5.symbol_info_tick(symbol)
-    if not symbol_info or not tick:
-        return False, "no symbol/tick data"
+    global last_close_time, last_status_log_time
 
-    contract = get_contract_size(symbol_info)
-    spread_cost = volume * contract * (tick.ask - tick.bid)
-    projected_pnl = basket_pnl - spread_cost
-    cushion = projected_pnl + MAX_LOSS_USD
+    ticket = pos.ticket
+    current_pnl = pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
 
-    if cushion < HEDGE_MIN_CUSHION_USD:
-        return False, (f"basket after spread ${projected_pnl:.2f} leaves only ${cushion:.2f} "
-                       f"before -${MAX_LOSS_USD:.2f} (need ${HEDGE_MIN_CUSHION_USD:.2f})")
-
-    new_net = get_net_volume(positions) + (volume if direction == "BUY" else -volume)
-    if abs(new_net) > 1e-9:
-        room = cushion / (abs(new_net) * contract)
-        if room < HEDGE_MIN_ROOM_PRICE:
-            return False, (f"net {new_net:+.2f} lots -> only ${room:.2f} gold move to -${MAX_LOSS_USD:.2f} "
-                           f"(need ${HEDGE_MIN_ROOM_PRICE:.2f})")
-
-    return True, f"spread cost ${spread_cost:.2f}, ${cushion:.2f} left before -${MAX_LOSS_USD:.2f}"
-
-def try_open_hedge(symbol, positions, basket_pnl, next_level, direction, volume, trigger_reason):
-    """Opens a hedge only if hedge_has_room() allows it. Returns True if the hedge was placed."""
-    global hedge_blocked_notified
-    allowed, reason = hedge_has_room(symbol, positions, basket_pnl, direction, volume)
-    if not allowed:
-        if hedge_blocked_notified != next_level:
-            hedge_blocked_notified = next_level
-            logger.warning(f"🚫 Level {next_level} hedge BLOCKED: {reason}")
-            send_push_notification(
-                f"🚫 Level {next_level} Hedge Blocked",
-                f"{symbol} {direction} {volume} lots not opened: {reason}. "
-                f"Basket waits for +${HEDGE_TARGET_PROFIT_USD:.2f} or -${MAX_LOSS_USD:.2f} stop."
-            )
-        return False
-
-    res, _ = open_recovery_hedge_level(
-        symbol=symbol,
-        next_level=next_level,
-        direction=direction,
-        volume=volume,
-        trigger_reason=f"{trigger_reason} | {reason}"
-    )
-    return bool(res)
-
-def reset_basket_state():
-    global last_hedge_time, basket_tickets, broker_stop_state, hedge_blocked_notified
-    trade_peak_profit.clear()
-    last_hedge_time = None
-    basket_tickets = None
-    broker_stop_state = None
-    hedge_blocked_notified = None
-
-def manage_active_trade(symbol):
-    """
-    Manages active trade(s):
-    - SINGLE TRADE (original 0.20 only): trailing profit lock using TRAILING_PROFIT_DROP_USD ($20).
-      The +$2.50 basket target is NOT used here. If loss reaches -$70,
-      the first hedge (0.40 lots, opposite direction) is opened.
-    - HEDGED BASKET (2+ trades): closes ALL trades when net P&L >= HEDGE_TARGET_PROFIT_USD.
-      Each further hedge opens when the SUM of all open trades is at -$70 or worse AND at
-      least 10 minutes passed since the last hedge, opposite to the last trade, double size.
-    - -$150 protection: broker-side basket stop on every position, hedge room check,
-      partial-close detection and the software hard stop (MAX_LOSS_USD).
-    Returns True if trade(s) active, False if all trades closed.
-    """
-    global last_close_time, last_status_log_time, last_hedge_time, basket_tickets
-
-    positions = get_active_positions(symbol)
-    if not positions:
-        if basket_tickets:
-            # Whole basket was closed by the broker (basket stop SL/TP hit)
-            logger.warning("🛡️ Basket closed by broker-side stop.")
-            send_push_notification(
-                "🛡️ Broker Basket Stop Hit",
-                f"All {symbol} positions were closed by the broker at the -${MAX_LOSS_USD:.0f} basket stop."
-            )
-            last_close_time = time.time()
-        reset_basket_state()
-        return False
-
-    total_basket_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
-    current_tickets = set(p.ticket for p in positions)
-
-    # 1a. Broker closed PART of the basket (SL/TP hit on some positions) -> close the rest now
-    if basket_tickets and not basket_tickets.issubset(current_tickets):
-        logger.warning(
-            f"🛡️ {len(basket_tickets - current_tickets)} basket position(s) closed by broker stop. "
-            f"Closing remaining {len(positions)} position(s)..."
-        )
-        send_push_notification(
-            "🛡️ Broker Basket Stop Hit",
-            f"Broker closed part of the {symbol} basket at the -${MAX_LOSS_USD:.0f} stop. Closing the rest."
-        )
-        close_all_positions(symbol, "Broker basket stop (partial close)")
-        reset_basket_state()
-        last_close_time = time.time()
-        return False
-    basket_tickets = current_tickets
-
-    # 1b. Software Hard Downside Watchdog (applies to single trade AND hedged basket)
-    if MAX_LOSS_USD > 0 and total_basket_pnl <= -MAX_LOSS_USD:
-        logger.warning(f"🛑 Hard Loss Stop Triggered (P&L: ${total_basket_pnl:.2f} <= -${MAX_LOSS_USD:.2f}). Closing all positions...")
-        send_push_notification(
-            "🛑 Hard Loss Stop Triggered",
-            f"Basket loss reached -${abs(total_basket_pnl):.2f} (Limit: -${MAX_LOSS_USD:.2f}). Closed all positions immediately!"
-        )
-        close_all_positions(symbol, f"Watchdog Max Loss -${abs(total_basket_pnl):.2f}")
-        reset_basket_state()
-        last_close_time = time.time()
-        return False
-
-    # 1c. Keep the broker-side -$150 basket stop up to date on every position
-    sync_broker_basket_stop(symbol, positions, total_basket_pnl)
-
-    # =====================================================================
-    # 2. SINGLE TRADE MODE (original 0.20 lot only) -> TRAILING PROFIT LOCK
-    # =====================================================================
-    if len(positions) == 1:
-        pos = positions[0]
-        ticket = pos.ticket
-        current_pnl = total_basket_pnl
-
-        # Track peak floating profit (stored from the first moment the trade is seen)
-        peak_pnl = max(trade_peak_profit.get(ticket, current_pnl), current_pnl)
+    # Track and persist the peak floating profit
+    old_peak = trade_peak_profit.get(ticket)
+    peak_pnl = current_pnl if old_peak is None else max(old_peak, current_pnl)
+    if old_peak is None or peak_pnl > old_peak + 0.009:
         trade_peak_profit[ticket] = peak_pnl
+        save_trailing_state()
 
-        # Trailing lock: active once peak profit reached at least $20.
-        # Closes when profit falls $20 below the highest point reached.
-        trailing_drop = peak_pnl - current_pnl
-        if (peak_pnl >= TRAILING_PROFIT_DROP_USD
-                and trailing_drop >= TRAILING_PROFIT_DROP_USD
-                and current_pnl > 0):
-            logger.info(
-                f"🎯 TRAILING PROFIT LOCK! Trade #{ticket} peak was +${peak_pnl:.2f}, dropped by ${trailing_drop:.2f} >= ${TRAILING_PROFIT_DROP_USD:.2f}. "
-                f"Closing trade to lock in +${current_pnl:.2f} profit!"
-            )
+    # Backup -$30 stop (the broker SL should normally close it first)
+    if current_pnl <= -STOP_LOSS_USD:
+        logger.warning(f"🛑 Stop loss: #{ticket} P&L ${current_pnl:.2f} <= -${STOP_LOSS_USD:.2f}. Closing...")
+        if close_trade(symbol, pos, f"Stop loss -${abs(current_pnl):.2f}"):
             send_push_notification(
-                "🎯 Trailing Profit Locked!",
-                f"Level 1 closed at +${current_pnl:.2f} (pulled back ${trailing_drop:.2f} from peak +${peak_pnl:.2f}) on {symbol}!"
+                "🛑 Stop Loss Hit",
+                f"{symbol} #{ticket} closed at ${current_pnl:.2f} (stop loss -${STOP_LOSS_USD:.0f})."
             )
-            close_all_positions(symbol, f"Trailing Profit Lock +${current_pnl:.2f}")
-            reset_basket_state()
+            forget_ticket(ticket)
             last_close_time = time.time()
             return False
-
-        # Loss reached -$70 -> open FIRST HEDGE: opposite direction, 0.40 lots (double of 0.20)
-        if current_pnl <= HEDGE_TRIGGER_LOSS_USD:
-            hedge_dir = "SELL" if pos.type == mt5.POSITION_TYPE_BUY else "BUY"
-            hedge_vol = get_volume_for_level(2)  # 0.40 when TRADE_VOLUME = 0.20
-            if try_open_hedge(symbol, positions, current_pnl, 2, hedge_dir, hedge_vol,
-                              f"Level 1 loss ${current_pnl:.2f} <= ${HEDGE_TRIGGER_LOSS_USD:.2f}"):
-                last_hedge_time = time.time()   # Level 3 waits at least 10 minutes
-            return True
-
-        # Periodic status log for single trade
-        now = time.time()
-        if now - last_status_log_time >= 10:
-            last_status_log_time = now
-            trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
-            lock_state = (
-                f"ARMED (closes at +${peak_pnl - TRAILING_PROFIT_DROP_USD:.2f})"
-                if peak_pnl >= TRAILING_PROFIT_DROP_USD
-                else f"arms at +${TRAILING_PROFIT_DROP_USD:.2f}"
-            )
-            logger.info(
-                f"📈 Active Level 1 #{ticket} ({trade_dir} {pos.volume} lots @ {pos.price_open:.2f}) | "
-                f"P&L: ${current_pnl:.2f} (Peak: ${peak_pnl:.2f}) | Trailing Lock: {lock_state} | "
-                f"Hedge Trigger: ${HEDGE_TRIGGER_LOSS_USD:.2f}"
-            )
         return True
 
-    # =====================================================================
-    # 3. HEDGED BASKET MODE (0.20 + 0.40 + ...) -> BASKET TARGET +$2.50
-    # =====================================================================
-    if total_basket_pnl >= HEDGE_TARGET_PROFIT_USD:
+    # Backup trailing lock (the broker SL at the lock level should normally close it first)
+    trailing_drop = peak_pnl - current_pnl
+    if peak_pnl >= TRAILING_PROFIT_DROP_USD and trailing_drop >= TRAILING_PROFIT_DROP_USD:
         logger.info(
-            f"🎉 BASKET TARGET ACHIEVED! Net PnL: +${total_basket_pnl:.2f} >= +${HEDGE_TARGET_PROFIT_USD:.2f} "
-            f"across {len(positions)} trades. Closing all trades!"
+            f"🎯 TRAILING PROFIT LOCK! #{ticket} peak +${peak_pnl:.2f}, dropped ${trailing_drop:.2f}. "
+            f"Closing at ${current_pnl:.2f}."
         )
-        send_push_notification(
-            "🎉 Basket Target Achieved!",
-            f"Hedged basket closed in profit: +${total_basket_pnl:.2f} across {len(positions)} trades on {symbol}!"
-        )
-        close_all_positions(symbol, f"Basket Target Profit +${total_basket_pnl:.2f}")
-        reset_basket_state()
-        last_close_time = time.time()
-        return False
-
-    current_level = len(positions)
-
-    latest_pos = positions[-1]
-    latest_dir = "BUY" if latest_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
-    next_level = current_level + 1
-    next_dir = "SELL" if latest_dir == "BUY" else "BUY"
-    next_vol = get_volume_for_level(next_level)
-    next_trigger = HEDGE_TRIGGER_LOSS_USD
-
-    # Max level reached -> only wait for basket target or hard stop
-    if MAX_HEDGE_LEVELS > 0 and current_level >= MAX_HEDGE_LEVELS:
-        now = time.time()
-        if now - last_status_log_time >= 10:
-            last_status_log_time = now
-            logger.info(
-                f"⚖️ Hedged Basket [Level {current_level}/{MAX_HEDGE_LEVELS} Max] | "
-                f"Net P&L: ${total_basket_pnl:.2f} / Target: +${HEDGE_TARGET_PROFIT_USD:.2f} | Waiting for profit..."
+        if close_trade(symbol, pos, f"Trailing Profit Lock ${current_pnl:.2f}"):
+            send_push_notification(
+                "🎯 Trailing Profit Locked!",
+                f"{symbol} #{ticket} closed at ${current_pnl:.2f} (pulled back ${trailing_drop:.2f} from peak +${peak_pnl:.2f})."
             )
+            forget_ticket(ticket)
+            last_close_time = time.time()
+            return False
         return True
 
-    # Bot restarted with a hedged basket already open -> start the 10-minute wait from now
-    if last_hedge_time is None:
-        last_hedge_time = time.time()
+    # Broker-side SL: -$30, raised to the trailing lock as the peak grows
+    stop, locked = sync_broker_stop(symbol, pos, peak_pnl)
 
-    # 10-minute wait between hedges
-    wait_left = HEDGE_WAIT_SECONDS - (time.time() - last_hedge_time)
+    if locked is not None and ticket not in armed_notified:
+        armed_notified.add(ticket)
+        send_push_notification(
+            "🔒 Trailing Lock Armed",
+            f"{symbol} #{ticket} peak +${peak_pnl:.2f}. Profit of +${locked:.2f} is now locked at the broker."
+        )
 
-    # Wait over and basket (sum of all open trades) at -$70 or worse -> open next hedge
-    if wait_left <= 0 and total_basket_pnl <= next_trigger:
-        if try_open_hedge(symbol, positions, total_basket_pnl, next_level, next_dir, next_vol,
-                          f"Basket of {current_level} trades at ${total_basket_pnl:.2f} <= ${next_trigger:.2f}"):
-            last_hedge_time = time.time()   # start the next 10-minute wait
-        return True
-
-    # Periodic status log for hedged basket
+    # Periodic status log
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
-        arm_state = (
-            f"waiting {int(wait_left // 60)}m {int(wait_left % 60)}s, then opens if basket <= ${next_trigger:.2f}"
-            if wait_left > 0
-            else f"READY, opens when basket <= ${next_trigger:.2f}"
+        trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+        lock_state = (
+            f"ARMED (locked +${locked:.2f})" if locked is not None
+            else f"arms at +${TRAILING_PROFIT_DROP_USD:.2f}"
         )
         logger.info(
-            f"⚖️ Hedged Basket [Level {current_level}, {len(positions)} trades] | "
-            f"Net P&L: ${total_basket_pnl:.2f} / Target: +${HEDGE_TARGET_PROFIT_USD:.2f} | "
-            f"Next: L{next_level} {next_dir} {next_vol}l ({arm_state}) | "
-            f"Hard stop: -${MAX_LOSS_USD:.2f}"
+            f"📈 Active #{ticket} ({trade_dir} {pos.volume} lots @ {pos.price_open:.2f}) | "
+            f"P&L: ${current_pnl:.2f} (Peak: ${peak_pnl:.2f}) | Trailing: {lock_state} | "
+            f"Broker SL: {stop if stop else pos.sl}"
         )
-
     return True
 
+def manage_active_trades(symbol):
+    """
+    Manages every open trade of this bot on its own (normally there is only one; no hedging).
+    Detects trades closed by the broker SL (stop loss or trailing lock).
+    Returns True if any trade is still open.
+    """
+    global last_close_time, known_tickets
+
+    positions = get_active_positions(symbol)
+    current = {p.ticket for p in positions}
+
+    # Trades that disappeared since the last loop were closed by the broker SL
+    for ticket in known_tickets - current:
+        pnl = get_closed_trade_pnl(ticket)
+        pnl_text = f"${pnl:.2f}" if pnl is not None else "unknown P&L"
+        logger.warning(f"🛡️ #{ticket} closed by the broker stop ({pnl_text}).")
+        send_push_notification(
+            "🛡️ Broker Stop Hit",
+            f"{symbol} #{ticket} closed by its broker SL ({pnl_text})."
+        )
+        forget_ticket(ticket)
+        last_close_time = time.time()
+    known_tickets = set(current)
+
+    still_open = False
+    for pos in positions:
+        if manage_trade(symbol, pos):
+            still_open = True
+    return still_open
+
 def run_bot():
-    """Main execution loop for the $5K Challenge XAUUSD M5 Multi-Stage Hedged Bot."""
-    global last_close_time, last_processed_candle_time, phase1_announced
+    """Main execution loop for the $5K Challenge XAUUSD M5 single-trade bot."""
+    global last_close_time, last_processed_candle_time, phase1_announced, known_tickets
 
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
@@ -957,30 +751,37 @@ def run_bot():
         mt5.shutdown()
         return
 
+    # Restore saved peaks; drop the ones whose trades are no longer open
+    load_trailing_state()
+    open_now = {p.ticket for p in get_active_positions(SYMBOL)}
+    stale = [t for t in trade_peak_profit if t not in open_now]
+    for t in stale:
+        trade_peak_profit.pop(t, None)
+    if stale:
+        save_trailing_state()
+    known_tickets = set(open_now)
+
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Multi-Stage Basket Recovery Bot")
+    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Single-Trade Bot (no hedging)")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Original Trade: {TRADE_VOLUME} lots")
-    logger.info(f"Single Trade Exit: Trailing lock, closes when profit drops ${TRAILING_PROFIT_DROP_USD:.2f} from peak")
-    logger.info(f"Hedge Trigger: every hedge opens when basket (sum of all trades) <= ${HEDGE_TRIGGER_LOSS_USD:.2f}")
-    logger.info(f"Hedge Wait: {HEDGE_WAIT_SECONDS // 60} minutes after each hedge before checking the basket again")
-    logger.info(f"Hedged Basket Exit: Close ALL trades when Net PnL >= +${HEDGE_TARGET_PROFIT_USD:.2f}")
-    logger.info(f"Hedge Progression: {HEDGE_LOT_SIZES}")
-    logger.info(f"Max Hedges: {MAX_HEDGES} (Levels incl. original: {MAX_HEDGE_LEVELS})")
-    logger.info(f"Hard Loss Stop: Close ALL trades at basket loss -${MAX_LOSS_USD:.2f}")
-    logger.info(f"Broker Basket Stop: {'ON' if BROKER_BASKET_STOP else 'OFF'} (SL/TP on every position at the -${MAX_LOSS_USD:.0f} price)")
-    logger.info(f"Hedge Room Check: need ${HEDGE_MIN_CUSHION_USD:.0f} left after spread and >= ${HEDGE_MIN_ROOM_PRICE:.2f} gold move to -${MAX_LOSS_USD:.0f}")
+    logger.info(f"Trade: {TRADE_VOLUME} lots, one trade at a time")
+    logger.info(f"Stop Loss: -${STOP_LOSS_USD:.2f} on every trade (broker SL + bot backup)")
+    logger.info(f"Trailing Lock: arms at +${TRAILING_PROFIT_DROP_USD:.2f}, closes ${TRAILING_PROFIT_DROP_USD:.2f} below the peak")
+    logger.info(f"Trailing is persistent: broker SL follows the lock, peaks saved to {TRAILING_STATE_FILE}")
     logger.info(f"⚠️ MONITORING (alerts only):")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
     logger.info(f"  - Max Risk at any time: ${MAX_RISK_AT_ANY_TIME_USD:.2f}")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
     logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
+    if open_now:
+        logger.info(f"Resuming {len(open_now)} open trade(s): {sorted(open_now)}")
     logger.info("=" * 65)
 
     send_push_notification(
         "🚀 5K Bot Online",
-        f"Push notification test successful! Bot active on {SYMBOL} (M5). Monitoring Challenge Limits: Daily -${MAX_DAILY_LOSS_USD:.0f}, Max -${MAX_TOTAL_LOSS_USD:.0f}."
+        f"Bot active on {SYMBOL} (M5), no hedging. SL -${STOP_LOSS_USD:.0f} per trade, "
+        f"trailing -${TRAILING_PROFIT_DROP_USD:.0f} from peak."
     )
 
     try:
@@ -1002,15 +803,13 @@ def run_bot():
             # 2. Challenge Limits (MONITORING ONLY)
             check_challenge_limits(SYMBOL)
 
-            # 3. Manage Active Trade(s)
-            has_active_trade = manage_active_trade(SYMBOL)
-            if has_active_trade:
+            # 3. Manage the open trade(s)
+            if manage_active_trades(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
             # 4. Cooldown after Trade Close
-            time_since_last_close = time.time() - last_close_time
-            if time_since_last_close < COOLDOWN_SECONDS:
+            if time.time() - last_close_time < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
