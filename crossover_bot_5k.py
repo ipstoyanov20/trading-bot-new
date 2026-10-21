@@ -1,5 +1,4 @@
 import os
-import json
 import MetaTrader5 as mt5
 import time
 import logging
@@ -44,26 +43,39 @@ BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Trade Risk ---
-TRADE_VOLUME = 0.20                 # Trade volume: 0.20 lots, one trade at a time (no hedging)
+# --- Entry Signal: candle NEAR the band (does not have to touch it) ---
+# Checked on the last completed M5 candle (shift 1):
+#   SELL: candle high came within NEAR_BAND_FRACTION of the band width from the UPPER band
+#         (touching or crossing it also counts), candle closed inside the bands and above the middle.
+#   BUY:  candle low came within NEAR_BAND_FRACTION of the band width from the LOWER band
+#         (touching or crossing it also counts), candle closed inside the bands and below the middle.
+# Example: bands 4140 - 4160 (width $20), NEAR_BAND_FRACTION 0.15 -> "near" = within $3 of the band.
+NEAR_BAND_FRACTION = 0.15
 
-# Stop loss on EVERY trade: a broker-side SL at the price where this trade loses exactly $30.
-# It is sent with the order and corrected to the real fill price right after. The bot also
-# closes the trade itself at -$30 as a backup (e.g. if the broker refused the SL).
-STOP_LOSS_USD = 30.00
+# --- Trade Size & Stop Loss ---
+# ONE ORDER AT A TIME. No hedging. A new trade opens only when no bot position is open.
+TRADE_VOLUME = 0.20                 # Lot size for every trade
 
-# --- Exit Rule: Persistent Trailing Profit Lock ---
-# Tracks the highest floating profit (peak). Once the peak reaches TRAILING_PROFIT_DROP_USD,
-# the trade is closed when profit falls TRAILING_PROFIT_DROP_USD below the peak
-# (e.g. peak +$85 -> closes at +$65).
-# Persistent:
-#   1. The broker-side SL is moved up to the locked profit level as the peak grows (it never
-#      moves back), so the lock holds at the broker even if the bot stops or disconnects.
-#   2. The peak is saved to TRAILING_STATE_FILE, so a bot restart continues from the same peak.
-TRAILING_PROFIT_DROP_USD = 20.00
-TRAILING_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trailing_state.json")
-SL_MIN_STEP_PRICE = 0.05            # Only move the broker SL when it improves by at least this much
+# Stop loss = Bollinger band + breathing room:
+#   SELL: SL = current UPPER band + buffer
+#   BUY:  SL = current LOWER band - buffer
+# SL_BUFFER_USD is in ACCOUNT DOLLARS, converted to a gold price distance using the lot size.
+#   With 0.20 lots: $20 buffer = $1.00 gold move beyond the band.
+SL_BUFFER_USD = 20.00
+MAX_SL_LOSS_USD = 150.00            # If band + buffer would risk more than this, the SL is pulled in to this loss
+MAX_LOSS_USD = 150.0                # Software safety stop: closes the trade if loss reaches -$150 (backup if broker SL fails)
 
+# --- Exit Rules: Peak Profit Lock after the MIDDLE band ---
+# The trade is NOT closed by profit until BOTH are true:
+#   1. Price has crossed the MIDDLE Bollinger band in the trade's direction
+#      (BUY: price above middle, SELL: price below middle), and
+#   2. Profit is at least MIN_LOCK_PROFIT_USD (+$40).
+# Until then the bot just waits (only the stop loss can close the trade).
+# Once armed, the peak profit is tracked and the trade closes when profit falls to:
+#   max(MIN_LOCK_PROFIT_USD, peak - PEAK_DROP_USD)
+#   e.g. peak +$45 -> closes at +$40 | peak +$70 -> closes at +$50 | peak +$120 -> closes at +$100
+MIN_LOCK_PROFIT_USD = 40.00
+PEAK_DROP_USD = 20.00
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
@@ -71,10 +83,10 @@ last_processed_candle_time = None   # Timestamp of last processed candle shift 1
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
-trade_peak_profit = {}              # Peak floating profit per ticket: {ticket: float} (saved to disk)
+trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
+trade_lock_armed = {}               # Tickets whose profit lock is armed (past middle + $40): {ticket: True}
 known_tickets = set()               # Tickets seen on the previous loop (detects broker SL closes)
-armed_notified = set()              # Tickets whose "trailing armed" alert was already sent
-sl_warn_time = {}                   # Last time an "SL could not be set" warning was logged per ticket
+multi_position_warned = False       # Warned once that more than one position is open
 phase1_announced = False            # Prevents Phase 1 banner from logging every second
 
 # --- Limit Monitoring & Safety State Flags ---
@@ -148,42 +160,6 @@ def send_push_notification(title, message):
 # Backward-compatible alias
 send_mt5_notification = send_push_notification
 
-# =====================================================================
-# Persistent trailing state (peak profit per ticket, survives restarts)
-# =====================================================================
-def load_trailing_state():
-    """Loads saved peaks from TRAILING_STATE_FILE into trade_peak_profit."""
-    trade_peak_profit.clear()
-    try:
-        with open(TRAILING_STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for ticket, peak in data.items():
-            trade_peak_profit[int(ticket)] = float(peak)
-        if trade_peak_profit:
-            logger.info(f"💾 Loaded trailing peaks from {TRAILING_STATE_FILE}: {trade_peak_profit}")
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        logger.warning(f"⚠️ Could not read {TRAILING_STATE_FILE}: {e}. Starting with no saved peaks.")
-
-def save_trailing_state():
-    """Writes trade_peak_profit to disk atomically (temp file + replace)."""
-    try:
-        tmp = TRAILING_STATE_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({str(t): round(p, 2) for t, p in trade_peak_profit.items()}, f)
-        os.replace(tmp, TRAILING_STATE_FILE)
-    except Exception as e:
-        logger.warning(f"⚠️ Could not save {TRAILING_STATE_FILE}: {e}")
-
-def forget_ticket(ticket):
-    """Removes all per-trade state once a trade is closed."""
-    known_tickets.discard(ticket)
-    armed_notified.discard(ticket)
-    sl_warn_time.pop(ticket, None)
-    if trade_peak_profit.pop(ticket, None) is not None:
-        save_trailing_state()
-
 def get_filling_type(symbol):
     """Dynamically determines the correct execution filling mode supported by the broker."""
     symbol_info = mt5.symbol_info(symbol)
@@ -212,32 +188,8 @@ def normalize_volume(symbol_info, volume):
     return vol
 
 def get_contract_size(symbol_info):
+    """Ounces per lot (100 for XAUUSD on most brokers)."""
     return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
-
-def usd_to_price(usd, volume, contract_size):
-    """Gold price move ($) that changes a position of `volume` lots by `usd` dollars."""
-    return usd / (volume * contract_size)
-
-def stop_loss_price(is_buy, open_price, volume, contract_size):
-    """Price at which the trade has lost exactly STOP_LOSS_USD."""
-    dist = usd_to_price(STOP_LOSS_USD, volume, contract_size)
-    return open_price - dist if is_buy else open_price + dist
-
-def desired_stop_price(is_buy, open_price, volume, contract_size, peak):
-    """
-    The broker SL this trade should have now:
-    - the -$30 stop loss, or
-    - once the peak reached TRAILING_PROFIT_DROP_USD, the trailing lock (peak - drop), whichever
-      protects more. Returns (stop_price, locked_profit_or_None).
-    """
-    stop = stop_loss_price(is_buy, open_price, volume, contract_size)
-    locked = None
-    if peak >= TRAILING_PROFIT_DROP_USD:
-        locked = peak - TRAILING_PROFIT_DROP_USD
-        move = usd_to_price(locked, volume, contract_size)
-        lock_stop = open_price + move if is_buy else open_price - move
-        stop = max(stop, lock_stop) if is_buy else min(stop, lock_stop)
-    return stop, locked
 
 def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     """
@@ -259,42 +211,44 @@ def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
 
 def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
     """
-    Evaluates Bollinger Bands entry signal on candle shift 1:
-    - BUY: candle opens below Lower Band and closes back inside.
-    - SELL: candle opens above Upper Band and closes back inside.
-    Returns: (signal, candle_time) where signal is 'BUY', 'SELL', or None.
+    Evaluates the "near the band" entry signal on candle shift 1 (last completed candle):
+    - SELL: candle high reached the zone near the UPPER band, close inside the bands and above middle.
+    - BUY:  candle low reached the zone near the LOWER band, close inside the bands and below middle.
+    Returns: (signal, candle_time, bands) where signal is 'BUY', 'SELL' or None and
+    bands = dict(upper, middle, lower) of the CURRENT candle (shift 0), used for the stop loss.
     """
     df = get_bollinger_bands(symbol, timeframe, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
     if df.empty or len(df) < BB_PERIOD + 2:
-        return None, None
+        return None, None, None
 
     # iloc[-1] = shift 0 (current, incomplete), iloc[-2] = shift 1 (last completed)
-    candle_shift_1 = df.iloc[-2]
-    candle_time = candle_shift_1['time']
-    c_open = candle_shift_1['open']
-    c_close = candle_shift_1['close']
-    c_upper = candle_shift_1['upper']
-    c_lower = candle_shift_1['lower']
-    c_middle = candle_shift_1['middle']
+    c = df.iloc[-2]
+    cur = df.iloc[-1]
+    candle_time = c['time']
+    c_high, c_low, c_close = c['high'], c['low'], c['close']
+    c_upper, c_lower, c_middle = c['upper'], c['lower'], c['middle']
 
-    if pd.isna(c_upper) or pd.isna(c_lower):
-        return None, None
+    if pd.isna(c_upper) or pd.isna(c_lower) or pd.isna(cur['upper']):
+        return None, None, None
 
-    is_buy = bool((c_open < c_lower) and (c_close >= c_lower) and (c_close <= c_upper))
-    is_sell = bool((c_open > c_upper) and (c_close <= c_upper) and (c_close >= c_lower))
+    bands = {'upper': float(cur['upper']), 'middle': float(cur['middle']), 'lower': float(cur['lower'])}
+    near = (c_upper - c_lower) * NEAR_BAND_FRACTION
 
-    if is_buy and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]:
+    near_upper = (c_high >= c_upper - near) and (c_close <= c_upper) and (c_close > c_middle)
+    near_lower = (c_low <= c_lower + near) and (c_close >= c_lower) and (c_close < c_middle)
+
+    if near_upper and not near_lower and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]:
         logger.info(
-            f"🟢 BB BUY Signal on Shift 1 [{candle_time}] | Open: {c_open:.2f} < Lower: {c_lower:.2f} | "
-            f"Close: {c_close:.2f} >= Lower (Mid: {c_middle:.2f}, Upper: {c_upper:.2f})"
+            f"🔴 SELL Signal (near UPPER band) [{candle_time}] | High: {c_high:.2f} >= {c_upper - near:.2f} "
+            f"(Upper {c_upper:.2f} - near ${near:.2f}) | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
         )
-        return 'BUY', candle_time
-    elif is_sell and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]:
+        return 'SELL', candle_time, bands
+    if near_lower and not near_upper and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]:
         logger.info(
-            f"🔴 BB SELL Signal on Shift 1 [{candle_time}] | Open: {c_open:.2f} > Upper: {c_upper:.2f} | "
-            f"Close: {c_close:.2f} <= Upper (Mid: {c_middle:.2f}, Lower: {c_lower:.2f})"
+            f"🟢 BUY Signal (near LOWER band) [{candle_time}] | Low: {c_low:.2f} <= {c_lower + near:.2f} "
+            f"(Lower {c_lower:.2f} + near ${near:.2f}) | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
         )
-        return 'SELL', candle_time
+        return 'BUY', candle_time, bands
 
     global last_no_signal_log_time, last_logged_no_signal_candle
     now = time.time()
@@ -302,17 +256,15 @@ def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
         last_no_signal_log_time = now
         last_logged_no_signal_candle = candle_time
         logger.info(
-            f"⏳ Waiting for a signal (Bollinger Bands M5) | Shift 1 [{candle_time}] "
-            f"Open: {c_open:.2f}, Close: {c_close:.2f} | Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f}"
+            f"⏳ Waiting for a signal (near BB band, M5) | Shift 1 [{candle_time}] "
+            f"High: {c_high:.2f}, Low: {c_low:.2f}, Close: {c_close:.2f} | "
+            f"Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f} | Near zone: ${near:.2f}"
         )
 
-    return None, candle_time
+    return None, candle_time, bands
 
-def place_order_safe(symbol, order_type, volume, tp_points=0, sl_usd=0.0, comment="BB_Single", notify_on_error=True):
-    """
-    Places an order on MT5 with filling mode fallback and returns (result, fill_price).
-    sl_usd > 0 puts a stop loss at the price where this order loses sl_usd dollars.
-    """
+def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Single", notify_on_error=True):
+    """Places a market order with a stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
     action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -341,18 +293,9 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_usd=0.0, commen
             )
         return None, 0.0
 
-    is_buy = order_type == mt5.ORDER_TYPE_BUY
-    price = tick.ask if is_buy else tick.bid
+    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
     digits = getattr(symbol_info, 'digits', 2)
-    point = getattr(symbol_info, 'point', 0.01)
-
-    tp = 0.0
-    if tp_points > 0:
-        tp = round(price + (tp_points * point), digits) if is_buy else round(price - (tp_points * point), digits)
-
-    sl = 0.0
-    if sl_usd > 0:
-        sl = round(stop_loss_price(is_buy, price, volume, get_contract_size(symbol_info)), digits)
+    sl = round(sl_price, digits) if sl_price else 0.0
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -361,7 +304,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_usd=0.0, commen
         "type": order_type,
         "price": price,
         "sl": float(sl),
-        "tp": float(tp),
+        "tp": 0.0,
         "magic": MAGIC_NUMBER,
         "comment": comment,
         "deviation": DEVIATION,
@@ -397,7 +340,7 @@ def place_order_safe(symbol, order_type, volume, tp_points=0, sl_usd=0.0, commen
     return None, 0.0
 
 def get_active_positions(symbol):
-    """Returns open positions belonging to this bot's MAGIC_NUMBER, sorted chronologically."""
+    """Returns open positions belonging to this bot's MAGIC_NUMBER, oldest first."""
     positions = mt5.positions_get(symbol=symbol)
     if not positions:
         return []
@@ -450,8 +393,8 @@ def close_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
-def close_trade(symbol, position, reason):
-    """Closes one trade with retries. Returns True once it is gone."""
+def close_position_with_retry(symbol, position, reason=""):
+    """Closes one position, retrying up to 5 times."""
     for attempt in range(5):
         still_open = [p for p in get_active_positions(symbol) if p.ticket == position.ticket]
         if not still_open:
@@ -467,16 +410,6 @@ def close_trade(symbol, position, reason):
         )
         return False
     return True
-
-def get_closed_trade_pnl(ticket):
-    """Realized P&L of a closed position (all its exit deals), or None if not in history yet."""
-    deals = mt5.history_deals_get(position=ticket)
-    if not deals:
-        return None
-    exits = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
-    if not exits:
-        return None
-    return sum(d.profit + d.swap + getattr(d, 'commission', 0.0) for d in exits)
 
 def get_daily_realized_pnl(magic=MAGIC_NUMBER):
     """Calculates total closed PnL today (since 00:00 local time) for this bot's magic number."""
@@ -508,30 +441,71 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
 
     return total_pnl
 
-def open_single_trade(symbol, direction):
-    """Opens the 0.20 lot trade with a -$30 stop loss, based on the Bollinger Bands signal."""
-    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    comment = f"BB_{direction}"
+def calculate_stop_loss(symbol, direction, bands):
+    """
+    SELL: SL = upper band + buffer.  BUY: SL = lower band - buffer.
+    Buffer = SL_BUFFER_USD converted to a gold price distance for TRADE_VOLUME.
+    The SL is pulled in if it would risk more than MAX_SL_LOSS_USD.
+    Returns (sl_price, expected_loss_usd) or (None, reason) if no valid SL is possible.
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if not symbol_info or not tick:
+        return None, "no symbol/tick data"
 
+    dollars_per_price = TRADE_VOLUME * get_contract_size(symbol_info)   # $20 per $1 gold at 0.20 lots
+    buffer_price = SL_BUFFER_USD / dollars_per_price
+    max_price_dist = MAX_SL_LOSS_USD / dollars_per_price
+    point = getattr(symbol_info, 'point', 0.01)
+    min_dist = max((getattr(symbol_info, 'trade_stops_level', 0) or 0) * point, point * 10)
+
+    if direction == "SELL":
+        entry = tick.bid
+        sl = bands['upper'] + buffer_price
+        if sl - entry > max_price_dist:
+            sl = entry + max_price_dist
+        if sl <= tick.ask + min_dist:
+            return None, f"SL {sl:.2f} too close to price {tick.ask:.2f}"
+        dist = sl - entry
+    else:
+        entry = tick.ask
+        sl = bands['lower'] - buffer_price
+        if entry - sl > max_price_dist:
+            sl = entry - max_price_dist
+        if sl >= tick.bid - min_dist:
+            return None, f"SL {sl:.2f} too close to price {tick.bid:.2f}"
+        dist = entry - sl
+
+    return sl, dist * dollars_per_price
+
+def open_single_trade(symbol, direction, bands):
+    """Opens one TRADE_VOLUME trade with the Bollinger band stop loss."""
+    sl_price, info = calculate_stop_loss(symbol, direction, bands)
+    if sl_price is None:
+        logger.warning(f"⚠️ {direction} signal skipped: {info}")
+        return None, 0.0
+    expected_loss = info
+
+    order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
         volume=TRADE_VOLUME,
-        tp_points=0,                 # Exit is the trailing profit lock
-        sl_usd=STOP_LOSS_USD,        # -$30 stop loss
-        comment=comment
+        sl_price=sl_price,
+        comment=f"BB_Near_{direction}"
     )
 
     if res:
+        band_name = "Upper" if direction == "SELL" else "Lower"
         logger.info(
-            f"🚀 Trade Placed: {direction} {TRADE_VOLUME} lots at {fill_price:.2f} | "
-            f"Stop Loss: -${STOP_LOSS_USD:.2f} | "
-            f"Trailing Lock: arms at +${TRAILING_PROFIT_DROP_USD:.2f}, closes ${TRAILING_PROFIT_DROP_USD:.2f} below peak"
+            f"🚀 {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} "
+            f"({band_name} band {bands['upper' if direction == 'SELL' else 'lower']:.2f} + ${SL_BUFFER_USD:.0f} buffer) | "
+            f"Risk ≈ ${expected_loss:.2f} | Profit lock arms after Middle {bands['middle']:.2f} and +${MIN_LOCK_PROFIT_USD:.0f}"
         )
         send_push_notification(
             f"🟢 {direction} Placed",
-            f"{SYMBOL} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | "
-            f"SL -${STOP_LOSS_USD:.0f} | Trailing -${TRAILING_PROFIT_DROP_USD:.0f} from peak"
+            f"{symbol} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} (risk ≈ ${expected_loss:.0f}) | "
+            f"Lock after middle band +${MIN_LOCK_PROFIT_USD:.0f}"
         )
         return res, fill_price
     return None, 0.0
@@ -552,7 +526,7 @@ def check_challenge_limits(symbol):
         send_push_notification(
             "⚠️ DAILY LOSS LIMIT ALERT",
             f"Today's P&L: ${total_today_pnl:.2f} has reached the daily limit of -${MAX_DAILY_LOSS_USD:.2f}. "
-            f"Consider stopping the bot for today to preserve the account."
+            f"Consider closing positions manually to preserve account."
         )
     elif total_today_pnl > -MAX_DAILY_LOSS_USD + 25.0 and limit_notified_daily:
         limit_notified_daily = False
@@ -568,178 +542,144 @@ def check_challenge_limits(symbol):
     elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD + 50.0 and limit_notified_total:
         limit_notified_total = False
 
-    # 3. Max Risk / Drawdown Limit (-$150)
+    # 3. Max Risk / Floating Drawdown Limit (-$150)
     current_loss = min(floating_pnl, total_today_pnl)
     if current_loss <= -MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
         limit_notified_max_risk = True
         send_push_notification(
             f"⚠️ MAX LOSS ALERT (${MAX_RISK_AT_ANY_TIME_USD:.0f})",
-            f"Loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f}). "
-            f"Each trade is capped by its -${STOP_LOSS_USD:.0f} stop loss."
+            f"Loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f})."
         )
     elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False
 
-def sync_broker_stop(symbol, pos, peak):
+def forget_ticket(ticket):
+    trade_peak_profit.pop(ticket, None)
+    trade_lock_armed.pop(ticket, None)
+
+def manage_position(symbol, pos, middle, tick):
     """
-    Keeps the broker-side SL of one trade at desired_stop_price(): the -$30 stop, raised to the
-    trailing lock once armed. The SL only ever moves in the trade's favour.
-    Returns (stop_price, locked_profit_or_None).
-    """
-    symbol_info = mt5.symbol_info(symbol)
-    tick = mt5.symbol_info_tick(symbol)
-    if not symbol_info or not tick:
-        return None, None
-
-    is_buy = pos.type == mt5.POSITION_TYPE_BUY
-    digits = getattr(symbol_info, 'digits', 2)
-    point = getattr(symbol_info, 'point', 0.01)
-    stop, locked = desired_stop_price(is_buy, pos.price_open, pos.volume, get_contract_size(symbol_info), peak)
-    stop = round(stop, digits)
-
-    # Never loosen: skip unless the new SL is at least SL_MIN_STEP_PRICE better than the current one
-    if pos.sl > 0:
-        improvement = (stop - pos.sl) if is_buy else (pos.sl - stop)
-        if improvement < SL_MIN_STEP_PRICE:
-            return pos.sl, locked
-
-    # The broker refuses an SL closer to the price than its stops level (or on the wrong side)
-    min_dist = (getattr(symbol_info, 'trade_stops_level', 0) or 0) * point
-    valid = stop < tick.bid - min_dist if is_buy else stop > tick.ask + min_dist
-    if not valid:
-        now = time.time()
-        if now - sl_warn_time.get(pos.ticket, 0) >= 30:
-            sl_warn_time[pos.ticket] = now
-            logger.warning(f"⚠️ SL {stop} too close to price for #{pos.ticket}; the bot's own stop covers it.")
-        return pos.sl, locked
-
-    res = mt5.order_send({
-        "action": mt5.TRADE_ACTION_SLTP,
-        "symbol": symbol,
-        "position": pos.ticket,
-        "sl": float(stop),
-        "tp": float(pos.tp),
-        "magic": MAGIC_NUMBER,
-    })
-    if not res or res.retcode not in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-        now = time.time()
-        if now - sl_warn_time.get(pos.ticket, 0) >= 30:
-            sl_warn_time[pos.ticket] = now
-            err = mt5.last_error() if not res else f"{res.comment} (Code: {res.retcode})"
-            logger.warning(f"⚠️ Could not set SL {stop} on #{pos.ticket}: {err}")
-        return pos.sl, locked
-
-    # Once armed the lock (>= $0 profit) is always tighter than the -$30 stop
-    what = f"trailing lock +${locked:.2f}" if locked is not None else f"stop loss -${STOP_LOSS_USD:.2f}"
-    logger.info(f"🛡️ Broker SL on #{pos.ticket} set @ {stop:.{digits}f} ({what})")
-    return stop, locked
-
-def manage_trade(symbol, pos):
-    """
-    One trade: -$30 stop loss and persistent trailing profit lock.
-    Returns True while the trade stays open.
+    Manages one open trade. Returns True if it is still open, False if the bot closed it.
+    - Software safety stop at -MAX_LOSS_USD (the broker SL normally closes it first).
+    - Profit lock arms only when price is past the middle band AND profit >= +$40.
+    - Once armed: closes when profit falls to max($40, peak - $20).
     """
     global last_close_time, last_status_log_time
 
     ticket = pos.ticket
-    current_pnl = pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
+    pnl = pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
+    is_buy = pos.type == mt5.POSITION_TYPE_BUY
+    trade_dir = "BUY" if is_buy else "SELL"
 
-    # Track and persist the peak floating profit
-    old_peak = trade_peak_profit.get(ticket)
-    peak_pnl = current_pnl if old_peak is None else max(old_peak, current_pnl)
-    if old_peak is None or peak_pnl > old_peak + 0.009:
-        trade_peak_profit[ticket] = peak_pnl
-        save_trailing_state()
+    # 1. Software safety stop
+    if MAX_LOSS_USD > 0 and pnl <= -MAX_LOSS_USD:
+        logger.warning(f"🛑 Safety Stop: #{ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
+        send_push_notification("🛑 Safety Stop Triggered", f"{symbol} #{ticket} closed at ${pnl:.2f} (limit -${MAX_LOSS_USD:.0f}).")
+        close_position_with_retry(symbol, pos, f"Safety stop ${pnl:.2f}")
+        forget_ticket(ticket)
+        last_close_time = time.time()
+        return False
 
-    # Backup -$30 stop (the broker SL should normally close it first)
-    if current_pnl <= -STOP_LOSS_USD:
-        logger.warning(f"🛑 Stop loss: #{ticket} P&L ${current_pnl:.2f} <= -${STOP_LOSS_USD:.2f}. Closing...")
-        if close_trade(symbol, pos, f"Stop loss -${abs(current_pnl):.2f}"):
-            send_push_notification(
-                "🛑 Stop Loss Hit",
-                f"{symbol} #{ticket} closed at ${current_pnl:.2f} (stop loss -${STOP_LOSS_USD:.0f})."
-            )
-            forget_ticket(ticket)
-            last_close_time = time.time()
-            return False
-        return True
+    # 2. Peak profit tracking
+    peak = max(trade_peak_profit.get(ticket, pnl), pnl)
+    trade_peak_profit[ticket] = peak
 
-    # Backup trailing lock (the broker SL at the lock level should normally close it first)
-    trailing_drop = peak_pnl - current_pnl
-    if peak_pnl >= TRAILING_PROFIT_DROP_USD and trailing_drop >= TRAILING_PROFIT_DROP_USD:
+    # 3. Arm the profit lock: past the middle band AND at least +$40
+    if middle is not None and tick is not None:
+        price = tick.bid if is_buy else tick.ask
+        past_middle = price > middle if is_buy else price < middle
+    else:
+        price, past_middle = 0.0, False
+
+    if not trade_lock_armed.get(ticket) and past_middle and pnl >= MIN_LOCK_PROFIT_USD:
+        trade_lock_armed[ticket] = True
         logger.info(
-            f"🎯 TRAILING PROFIT LOCK! #{ticket} peak +${peak_pnl:.2f}, dropped ${trailing_drop:.2f}. "
-            f"Closing at ${current_pnl:.2f}."
+            f"🔒 Profit lock ARMED on #{ticket}: price {price:.2f} past middle {middle:.2f} and P&L +${pnl:.2f} >= +${MIN_LOCK_PROFIT_USD:.2f}"
         )
-        if close_trade(symbol, pos, f"Trailing Profit Lock ${current_pnl:.2f}"):
+        send_push_notification(
+            "🔒 Profit Lock Armed",
+            f"{symbol} {trade_dir} #{ticket} past middle band at +${pnl:.2f}. Minimum +${MIN_LOCK_PROFIT_USD:.0f} now locked."
+        )
+
+    # 4. Armed -> close when profit falls to the lock level
+    if trade_lock_armed.get(ticket):
+        lock_level = max(MIN_LOCK_PROFIT_USD, peak - PEAK_DROP_USD)
+        if pnl <= lock_level:
+            logger.info(f"🎯 PROFIT LOCK HIT on #{ticket}: P&L +${pnl:.2f} <= lock +${lock_level:.2f} (peak +${peak:.2f}). Closing...")
             send_push_notification(
-                "🎯 Trailing Profit Locked!",
-                f"{symbol} #{ticket} closed at ${current_pnl:.2f} (pulled back ${trailing_drop:.2f} from peak +${peak_pnl:.2f})."
+                "🎯 Profit Locked!",
+                f"{symbol} {trade_dir} #{ticket} closed at +${pnl:.2f} (peak +${peak:.2f})."
             )
+            close_position_with_retry(symbol, pos, f"Profit lock +${pnl:.2f}")
             forget_ticket(ticket)
             last_close_time = time.time()
             return False
-        return True
 
-    # Broker-side SL: -$30, raised to the trailing lock as the peak grows
-    stop, locked = sync_broker_stop(symbol, pos, peak_pnl)
-
-    if locked is not None and ticket not in armed_notified:
-        armed_notified.add(ticket)
-        send_push_notification(
-            "🔒 Trailing Lock Armed",
-            f"{symbol} #{ticket} peak +${peak_pnl:.2f}. Profit of +${locked:.2f} is now locked at the broker."
-        )
-
-    # Periodic status log
+    # 5. Status log every 10 seconds
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
-        trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
-        lock_state = (
-            f"ARMED (locked +${locked:.2f})" if locked is not None
-            else f"arms at +${TRAILING_PROFIT_DROP_USD:.2f}"
-        )
+        if trade_lock_armed.get(ticket):
+            lock_state = f"ARMED, closes at +${max(MIN_LOCK_PROFIT_USD, peak - PEAK_DROP_USD):.2f}"
+        else:
+            need = []
+            if not past_middle:
+                need.append(f"price past middle {middle:.2f}" if middle is not None else "middle band")
+            if pnl < MIN_LOCK_PROFIT_USD:
+                need.append(f"P&L >= +${MIN_LOCK_PROFIT_USD:.0f}")
+            lock_state = "waiting for " + " and ".join(need)
         logger.info(
-            f"📈 Active #{ticket} ({trade_dir} {pos.volume} lots @ {pos.price_open:.2f}) | "
-            f"P&L: ${current_pnl:.2f} (Peak: ${peak_pnl:.2f}) | Trailing: {lock_state} | "
-            f"Broker SL: {stop if stop else pos.sl}"
+            f"📈 #{ticket} {trade_dir} {pos.volume} lots @ {pos.price_open:.2f} | Price {price:.2f} | "
+            f"P&L ${pnl:.2f} (Peak ${peak:.2f}) | SL {pos.sl:.2f} | Lock: {lock_state}"
         )
     return True
 
-def manage_active_trades(symbol):
+def manage_active_trade(symbol):
     """
-    Manages every open trade of this bot on its own (normally there is only one; no hedging).
-    Detects trades closed by the broker SL (stop loss or trailing lock).
-    Returns True if any trade is still open.
+    Manages the open trade (one at a time, no hedging).
+    Returns True while any bot position is open, False when none is open.
     """
-    global last_close_time, known_tickets
+    global last_close_time, known_tickets, multi_position_warned
 
     positions = get_active_positions(symbol)
-    current = {p.ticket for p in positions}
+    current = set(p.ticket for p in positions)
 
-    # Trades that disappeared since the last loop were closed by the broker SL
+    # Positions that disappeared without the bot closing them -> broker stop loss hit
     for ticket in known_tickets - current:
-        pnl = get_closed_trade_pnl(ticket)
-        pnl_text = f"${pnl:.2f}" if pnl is not None else "unknown P&L"
-        logger.warning(f"🛡️ #{ticket} closed by the broker stop ({pnl_text}).")
-        send_push_notification(
-            "🛡️ Broker Stop Hit",
-            f"{symbol} #{ticket} closed by its broker SL ({pnl_text})."
-        )
+        if ticket in trade_peak_profit or ticket in trade_lock_armed:
+            logger.warning(f"🛡️ #{ticket} closed by broker (stop loss).")
+            send_push_notification("🛡️ Stop Loss Hit", f"{symbol} #{ticket} was closed by its stop loss.")
+            last_close_time = time.time()
         forget_ticket(ticket)
-        last_close_time = time.time()
-    known_tickets = set(current)
+    known_tickets = current
+
+    if not positions:
+        multi_position_warned = False
+        return False
+
+    if len(positions) > 1 and not multi_position_warned:
+        multi_position_warned = True
+        logger.warning(f"⚠️ {len(positions)} bot positions open (e.g. leftovers from the old hedge version). Managing each one; no new trades until all are closed.")
+        send_push_notification(
+            "⚠️ Several Positions Open",
+            f"{len(positions)} {symbol} bot positions are open. Each is managed separately; no new trade until all close."
+        )
+
+    df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
+    middle = None
+    if not df.empty and not pd.isna(df.iloc[-1]['middle']):
+        middle = float(df.iloc[-1]['middle'])
+    tick = mt5.symbol_info_tick(symbol)
 
     still_open = False
     for pos in positions:
-        if manage_trade(symbol, pos):
+        if manage_position(symbol, pos, middle, tick):
             still_open = True
     return still_open
 
 def run_bot():
     """Main execution loop for the $5K Challenge XAUUSD M5 single-trade bot."""
-    global last_close_time, last_processed_candle_time, phase1_announced, known_tickets
+    global last_close_time, last_processed_candle_time, phase1_announced
 
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
@@ -751,37 +691,29 @@ def run_bot():
         mt5.shutdown()
         return
 
-    # Restore saved peaks; drop the ones whose trades are no longer open
-    load_trailing_state()
-    open_now = {p.ticket for p in get_active_positions(SYMBOL)}
-    stale = [t for t in trade_peak_profit if t not in open_now]
-    for t in stale:
-        trade_peak_profit.pop(t, None)
-    if stale:
-        save_trailing_state()
-    known_tickets = set(open_now)
+    buffer_price = SL_BUFFER_USD / (TRADE_VOLUME * get_contract_size(symbol_info))
 
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Single-Trade Bot (no hedging)")
+    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Single-Trade Bot (NO hedging)")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Trade: {TRADE_VOLUME} lots, one trade at a time")
-    logger.info(f"Stop Loss: -${STOP_LOSS_USD:.2f} on every trade (broker SL + bot backup)")
-    logger.info(f"Trailing Lock: arms at +${TRAILING_PROFIT_DROP_USD:.2f}, closes ${TRAILING_PROFIT_DROP_USD:.2f} below the peak")
-    logger.info(f"Trailing is persistent: broker SL follows the lock, peaks saved to {TRAILING_STATE_FILE}")
+    logger.info(f"Entry: candle near UPPER band -> SELL, near LOWER band -> BUY (near = {NEAR_BAND_FRACTION:.0%} of band width)")
+    logger.info(f"Lot: {TRADE_VOLUME} | One trade at a time")
+    logger.info(f"Stop Loss: band ± ${SL_BUFFER_USD:.0f} buffer (= ${buffer_price:.2f} gold) | Max SL risk ${MAX_SL_LOSS_USD:.0f}")
+    logger.info(f"Exit: profit lock arms after price passes MIDDLE band with >= +${MIN_LOCK_PROFIT_USD:.0f}, "
+                f"then closes at max(+${MIN_LOCK_PROFIT_USD:.0f}, peak - ${PEAK_DROP_USD:.0f})")
+    logger.info(f"Safety Stop: close trade at -${MAX_LOSS_USD:.2f}")
     logger.info(f"⚠️ MONITORING (alerts only):")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
     logger.info(f"  - Max Risk at any time: ${MAX_RISK_AT_ANY_TIME_USD:.2f}")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
     logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
-    if open_now:
-        logger.info(f"Resuming {len(open_now)} open trade(s): {sorted(open_now)}")
     logger.info("=" * 65)
 
     send_push_notification(
         "🚀 5K Bot Online",
-        f"Bot active on {SYMBOL} (M5), no hedging. SL -${STOP_LOSS_USD:.0f} per trade, "
-        f"trailing -${TRAILING_PROFIT_DROP_USD:.0f} from peak."
+        f"Single-trade bot active on {SYMBOL} (M5), no hedging. SL band ± ${SL_BUFFER_USD:.0f}, "
+        f"lock after middle band at +${MIN_LOCK_PROFIT_USD:.0f}."
     )
 
     try:
@@ -803,24 +735,23 @@ def run_bot():
             # 2. Challenge Limits (MONITORING ONLY)
             check_challenge_limits(SYMBOL)
 
-            # 3. Manage the open trade(s)
-            if manage_active_trades(SYMBOL):
+            # 3. Manage the open trade (one at a time)
+            if manage_active_trade(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 4. Cooldown after Trade Close
+            # 4. Cooldown after a trade closes
             if time.time() - last_close_time < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 5. Bollinger Bands Entry Signal on Candle Shift 1
-            signal, candle_time = check_bb_entry_signal(SYMBOL, TIMEFRAME)
+            # 5. "Near the band" entry signal on candle shift 1
+            signal, candle_time, bands = check_bb_entry_signal(SYMBOL, TIMEFRAME)
 
             if signal and (last_processed_candle_time != candle_time):
-                logger.info(f"📊 M5 BB Entry Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
-                res, fill_price = open_single_trade(SYMBOL, signal)
-                if res:
-                    last_processed_candle_time = candle_time
+                last_processed_candle_time = candle_time   # one attempt per candle
+                logger.info(f"📊 M5 Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
+                open_single_trade(SYMBOL, signal, bands)
 
             time.sleep(SLEEP_INTERVAL)
 
