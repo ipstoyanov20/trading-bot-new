@@ -80,17 +80,17 @@ PAUSE_AFTER_LOSS = True
 # Price turns back BEFORE the middle band (early phase):
 #   Once peak profit reached EARLY_ARM_PROFIT_USD, the trade closes when profit falls to
 #   max(EARLY_MIN_PROFIT_USD, peak - EARLY_DROP_USD).
-#   e.g. peak +$15 -> closes at +$5 | peak +$30 -> closes at +$20
+#   e.g. peak +$30 -> closes at +$5 | peak +$100 -> closes at +$60
 #   If the peak never reaches +$15, the bot just waits (only the stop loss can close it).
 #
 # Price passed the middle band and turns back BEFORE the opposite band (late phase):
 #   The trade closes when profit falls to max(EARLY_MIN_PROFIT_USD, peak - PEAK_DROP_USD).
-#   e.g. peak +$60 -> closes at +$40 | peak +$100 -> closes at +$80
+#   e.g. peak +$60 -> closes at +$20 | peak +$150 -> closes at +$110
 # Once price has passed the middle band, the trade stays in the late phase.
 EARLY_ARM_PROFIT_USD = 15.00        # Early phase: peak profit needed before the lock works
-EARLY_DROP_USD = 10.00              # Early phase: close when profit falls this much from peak
+EARLY_DROP_USD = 40.00              # Early phase: close when profit falls this much from peak
 EARLY_MIN_PROFIT_USD = 5.00         # Minimum profit the lock aims to keep
-PEAK_DROP_USD = 20.00               # Late phase (past middle): close when profit falls this much from peak
+PEAK_DROP_USD = 40.00               # Late phase (past middle): close when profit falls this much from peak
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
