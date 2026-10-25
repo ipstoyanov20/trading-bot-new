@@ -36,81 +36,55 @@ COOLDOWN_SECONDS = 60               # Cooldown between completed trades
 MAGIC_NUMBER = 60020                # Unique identifier for this bot's orders
 DEVIATION = 20                      # Maximum price slippage in points
 
-# --- Strategy Parameters: Bollinger Bands ---
+# --- Strategy Parameters: Bollinger Bands (original logic) ---
 BB_PERIOD = 20                      # Period 20
 BB_DEVIATION = 2.0                  # Deviation 2.0
 BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Entry Signal: candle NEAR the band (does not have to touch it) ---
-# Checked on the last completed M5 candle (shift 1):
-#   SELL: candle high came within NEAR_BAND_FRACTION of the band width from the UPPER band
-#         (touching or crossing it also counts), candle closed inside the bands and above the middle.
-#   BUY:  candle low came within NEAR_BAND_FRACTION of the band width from the LOWER band
-#         (touching or crossing it also counts), candle closed inside the bands and below the middle.
-# Example: bands 4140 - 4160 (width $20), NEAR_BAND_FRACTION 0.05 -> "near" = within $1 of the band.
-NEAR_BAND_FRACTION = 0.05           # 5% of the band width = VERY close to the band
+# --- Entry Signal (original Bollinger band logic) ---
+# Checked on the last COMPLETED M5 candle (shift 1), using the bands of that same candle.
+#   SELL: candle HIGH touched or pierced the UPPER band, and the candle CLOSED back inside the bands
+#         (below the upper band).
+#   BUY:  candle LOW touched or pierced the LOWER band, and the candle CLOSED back inside the bands
+#         (above the lower band).
+# The trade is opened only after the candle has actually made that movement.
 
 # --- Trade Size & Stop Loss ---
 # ONE ORDER AT A TIME. No hedging. A new trade opens only when no bot position is open.
-TRADE_VOLUME = 0.20                 # Lot size for every trade
+TRADE_VOLUME = 0.10                 # Lot size for every trade
 
-# Stop loss = Bollinger band + breathing room:
-#   SELL: SL = current UPPER band + buffer
-#   BUY:  SL = current LOWER band - buffer
-# SL_BUFFER_USD is in ACCOUNT DOLLARS, converted to a gold price distance using the lot size.
-#   With 0.20 lots: $20 buffer = $1.00 gold move beyond the band.
-SL_BUFFER_USD = 20.00
-MAX_SL_LOSS_USD = 50.00             # Max loss per trade: if band + buffer would risk more, the SL is pulled in to -$50
-MAX_LOSS_USD = 55.0                 # Software safety stop: closes the trade at -$55 (backup if the broker SL fails or slips)
+# Stop loss is calculated dynamically from the ENTRY price:
+#   BUY:  SL = entry - distance
+#   SELL: SL = entry + distance
+# distance = STOP_LOSS_USD / (lot size * contract size)
+#   With 0.10 lots on XAUUSD (100 oz/lot): $1 gold move = $10, so $140 loss = $14 price distance.
+STOP_LOSS_USD = 140.0               # Stop loss in account dollars from the entry price
+MAX_LOSS_USD = 140.0                # Software backup stop: closes the trade at -$140 if the broker SL fails
 
-# --- Pause after a losing trade ---
-# After a trade closes with a LOSS, no new trade opens until price comes back to the MIDDLE
-# band and crosses it:
-#   losing SELL (price went UP)   -> wait until price falls BELOW the middle band
-#   losing BUY  (price went DOWN) -> wait until price rises ABOVE the middle band
-# Then normal signals resume (near upper -> SELL, near lower -> BUY).
-PAUSE_AFTER_LOSS = True
-
-# --- Exit Rules: target = OPPOSITE band, peak-profit lock if price turns back ---
-# TARGET: SELL from the upper band aims for the LOWER band, BUY from the lower band aims
-#         for the UPPER band. When price reaches the opposite band, the trade is closed.
-#
-# Price turns back BEFORE the middle band (early phase):
-#   Once peak profit reached EARLY_ARM_PROFIT_USD, the trade closes when profit falls to
-#   max(EARLY_MIN_PROFIT_USD, peak - EARLY_DROP_USD).
-#   e.g. peak +$30 -> closes at +$5 | peak +$100 -> closes at +$60
-#   If the peak never reaches +$15, the bot just waits (only the stop loss can close it).
-#
-# Price passed the middle band and turns back BEFORE the opposite band (late phase):
-#   The trade closes when profit falls to max(EARLY_MIN_PROFIT_USD, peak - PEAK_DROP_USD).
-#   e.g. peak +$60 -> closes at +$20 | peak +$150 -> closes at +$110
-# Once price has passed the middle band, the trade stays in the late phase.
-EARLY_ARM_PROFIT_USD = 15.00        # Early phase: peak profit needed before the lock works
-EARLY_DROP_USD = 40.00              # Early phase: close when profit falls this much from peak
-EARLY_MIN_PROFIT_USD = 5.00         # Minimum profit the lock aims to keep
-PEAK_DROP_USD = 40.00               # Late phase (past middle): close when profit falls this much from peak
+# --- Take Profit ---
+# Take profit = the OPPOSITE band, checked on the current price:
+#   BUY  closes when price reaches the UPPER band
+#   SELL closes when price reaches the LOWER band
+# The middle band does not affect the exit.
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
-last_processed_candle_time = None   # Timestamp of last processed candle shift 1
+last_processed_candle_time = None   # Timestamp of last candle a trade was attempted on
 last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
 last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
 last_status_log_time = 0            # Timestamp of periodic open trade status log
-trade_peak_profit = {}              # Tracks peak floating profit per ticket: {ticket: float}
-trade_lock_armed = {}               # Tickets that have passed the middle band (late phase): {ticket: True}
 known_tickets = set()               # Tickets seen on the previous loop (detects broker SL closes)
 multi_position_warned = False       # Warned once that more than one position is open
-trade_info = {}                     # {ticket: (direction, last P&L)} for detecting losses on broker closes
-loss_pause_side = None              # 'SELL' or 'BUY' of the last losing trade while the pause is active, else None
-last_pause_log_time = 0             # Timestamp of the last "paused" log
+trade_info = {}                     # {ticket: (direction, last P&L)} for detecting closes by broker
 phase1_announced = False            # Prevents Phase 1 banner from logging every second
 
 # --- Limit Monitoring & Safety State Flags ---
 limit_notified_daily = False        # Has daily loss limit been notified?
 limit_notified_total = False        # Has total loss limit been notified?
 limit_notified_max_risk = False     # Has max risk limit been notified?
+
 
 def send_push_notification(title, message):
     """
@@ -178,6 +152,7 @@ def send_push_notification(title, message):
 # Backward-compatible alias
 send_mt5_notification = send_push_notification
 
+
 def get_filling_type(symbol):
     """Dynamically determines the correct execution filling mode supported by the broker."""
     symbol_info = mt5.symbol_info(symbol)
@@ -192,6 +167,7 @@ def get_filling_type(symbol):
     else:
         return mt5.ORDER_FILLING_RETURN
 
+
 def normalize_volume(symbol_info, volume):
     """Rounds volume to the broker's volume step and clamps it to min/max allowed lots."""
     step = getattr(symbol_info, 'volume_step', 0.01) or 0.01
@@ -205,13 +181,15 @@ def normalize_volume(symbol_info, volume):
         vol = vmin
     return vol
 
+
 def get_contract_size(symbol_info):
     """Ounces per lot (100 for XAUUSD on most brokers)."""
     return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
 
+
 def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     """
-    Fetches M5 OHLC data and calculates Bollinger Bands:
+    Fetches OHLC data and calculates Bollinger Bands:
     period=20, deviation=2.0, shift=0, applied price=Close.
     """
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
@@ -227,59 +205,61 @@ def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     df['lower'] = df['middle'] - deviation * df['std']
     return df
 
+
 def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
     """
-    Evaluates the "near the band" entry signal on candle shift 1 (last completed candle):
-    - SELL: candle high reached the zone near the UPPER band, close inside the bands and above middle.
-    - BUY:  candle low reached the zone near the LOWER band, close inside the bands and below middle.
-    Returns: (signal, candle_time, bands) where signal is 'BUY', 'SELL' or None and
-    bands = dict(upper, middle, lower) of the CURRENT candle (shift 0), used for the stop loss.
+    Original Bollinger band logic on the last COMPLETED candle (shift 1):
+    - SELL: candle high touched/pierced the UPPER band and closed back inside the bands.
+    - BUY:  candle low touched/pierced the LOWER band and closed back inside the bands.
+    Returns: (signal, candle_time, None) where signal is 'BUY', 'SELL' or None.
     """
+    global last_no_signal_log_time, last_logged_no_signal_candle
+
     df = get_bollinger_bands(symbol, timeframe, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
     if df.empty or len(df) < BB_PERIOD + 2:
         return None, None, None
 
     # iloc[-1] = shift 0 (current, incomplete), iloc[-2] = shift 1 (last completed)
     c = df.iloc[-2]
-    cur = df.iloc[-1]
     candle_time = c['time']
     c_high, c_low, c_close = c['high'], c['low'], c['close']
     c_upper, c_lower, c_middle = c['upper'], c['lower'], c['middle']
 
-    if pd.isna(c_upper) or pd.isna(c_lower) or pd.isna(cur['upper']):
+    if pd.isna(c_upper) or pd.isna(c_lower) or pd.isna(c_middle):
         return None, None, None
 
-    bands = {'upper': float(cur['upper']), 'middle': float(cur['middle']), 'lower': float(cur['lower'])}
-    near = (c_upper - c_lower) * NEAR_BAND_FRACTION
+    touched_upper = c_high >= c_upper
+    touched_lower = c_low <= c_lower
+    closed_inside = c_lower < c_close < c_upper
 
-    near_upper = (c_high >= c_upper - near) and (c_close <= c_upper) and (c_close > c_middle)
-    near_lower = (c_low <= c_lower + near) and (c_close >= c_lower) and (c_close < c_middle)
+    sell_signal = touched_upper and closed_inside and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]
+    buy_signal = touched_lower and closed_inside and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]
 
-    if near_upper and not near_lower and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]:
+    if sell_signal and not buy_signal:
         logger.info(
-            f"🔴 SELL Signal (near UPPER band) [{candle_time}] | High: {c_high:.2f} >= {c_upper - near:.2f} "
-            f"(Upper {c_upper:.2f} - near ${near:.2f}) | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
+            f"🔴 SELL Signal (candle touched UPPER band, closed back inside) [{candle_time}] | "
+            f"High: {c_high:.2f} >= Upper {c_upper:.2f} | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
         )
-        return 'SELL', candle_time, bands
-    if near_lower and not near_upper and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]:
+        return 'SELL', candle_time, None
+    if buy_signal and not sell_signal:
         logger.info(
-            f"🟢 BUY Signal (near LOWER band) [{candle_time}] | Low: {c_low:.2f} <= {c_lower + near:.2f} "
-            f"(Lower {c_lower:.2f} + near ${near:.2f}) | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
+            f"🟢 BUY Signal (candle touched LOWER band, closed back inside) [{candle_time}] | "
+            f"Low: {c_low:.2f} <= Lower {c_lower:.2f} | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
         )
-        return 'BUY', candle_time, bands
+        return 'BUY', candle_time, None
 
-    global last_no_signal_log_time, last_logged_no_signal_candle
     now = time.time()
     if (candle_time != last_logged_no_signal_candle) or (now - last_no_signal_log_time >= 15):
         last_no_signal_log_time = now
         last_logged_no_signal_candle = candle_time
         logger.info(
-            f"⏳ Waiting for a signal (near BB band, M5) | Shift 1 [{candle_time}] "
+            f"⏳ Waiting for a signal (Bollinger touch + close inside, M5) | Shift 1 [{candle_time}] "
             f"High: {c_high:.2f}, Low: {c_low:.2f}, Close: {c_close:.2f} | "
-            f"Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f} | Near zone: ${near:.2f}"
+            f"Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f}"
         )
 
-    return None, candle_time, bands
+    return None, candle_time, None
+
 
 def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Single", notify_on_error=True):
     """Places a market order with a stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
@@ -322,7 +302,7 @@ def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Singl
         "type": order_type,
         "price": price,
         "sl": float(sl),
-        "tp": 0.0,
+        "tp": 0.0,                      # Take profit is managed by the bot (opposite band)
         "magic": MAGIC_NUMBER,
         "comment": comment,
         "deviation": DEVIATION,
@@ -357,6 +337,7 @@ def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Singl
         )
     return None, 0.0
 
+
 def get_active_positions(symbol):
     """Returns open positions belonging to this bot's MAGIC_NUMBER, oldest first."""
     positions = mt5.positions_get(symbol=symbol)
@@ -365,6 +346,7 @@ def get_active_positions(symbol):
     bot_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
     bot_positions.sort(key=lambda p: (p.time_msc if hasattr(p, 'time_msc') else p.time, p.ticket))
     return bot_positions
+
 
 def close_position(symbol, position):
     """Closes a single MT5 position safely."""
@@ -411,6 +393,7 @@ def close_position(symbol, position):
     logger.error(f"Failed to close #{position.ticket}: {err}")
     return False
 
+
 def close_position_with_retry(symbol, position, reason=""):
     """Closes one position, retrying up to 5 times."""
     for attempt in range(5):
@@ -429,6 +412,7 @@ def close_position_with_retry(symbol, position, reason=""):
         return False
     return True
 
+
 def get_daily_realized_pnl(magic=MAGIC_NUMBER):
     """Calculates total closed PnL today (since 00:00 local time) for this bot's magic number."""
     now = datetime.now()
@@ -443,6 +427,7 @@ def get_daily_realized_pnl(magic=MAGIC_NUMBER):
             daily_pnl += (d.profit + d.swap + getattr(d, 'commission', 0.0))
 
     return daily_pnl
+
 
 def get_total_closed_pnl(magic=MAGIC_NUMBER):
     """Calculates total cumulative closed PnL for Phase 1 target tracking."""
@@ -459,11 +444,14 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
 
     return total_pnl
 
-def calculate_stop_loss(symbol, direction, bands):
+
+def calculate_stop_loss(symbol, direction):
     """
-    SELL: SL = upper band + buffer.  BUY: SL = lower band - buffer.
-    Buffer = SL_BUFFER_USD converted to a gold price distance for TRADE_VOLUME.
-    The SL is pulled in if it would risk more than MAX_SL_LOSS_USD.
+    Dynamic stop loss from the ENTRY price (current tick):
+      BUY:  SL = entry - distance
+      SELL: SL = entry + distance
+    distance = STOP_LOSS_USD / (lot size * contract size)
+    e.g. 0.10 lots, 100 oz: $140 / (0.10 * 100) = $14.00 gold price distance.
     Returns (sl_price, expected_loss_usd) or (None, reason) if no valid SL is possible.
     """
     symbol_info = mt5.symbol_info(symbol)
@@ -471,34 +459,29 @@ def calculate_stop_loss(symbol, direction, bands):
     if not symbol_info or not tick:
         return None, "no symbol/tick data"
 
-    dollars_per_price = TRADE_VOLUME * get_contract_size(symbol_info)   # $20 per $1 gold at 0.20 lots
-    buffer_price = SL_BUFFER_USD / dollars_per_price
-    max_price_dist = MAX_SL_LOSS_USD / dollars_per_price
+    volume = normalize_volume(symbol_info, TRADE_VOLUME)
+    dollars_per_price = volume * get_contract_size(symbol_info)   # $10 per $1 gold at 0.10 lots
+    distance = STOP_LOSS_USD / dollars_per_price
     point = getattr(symbol_info, 'point', 0.01)
     min_dist = max((getattr(symbol_info, 'trade_stops_level', 0) or 0) * point, point * 10)
 
-    if direction == "SELL":
-        entry = tick.bid
-        sl = bands['upper'] + buffer_price
-        if sl - entry > max_price_dist:
-            sl = entry + max_price_dist
-        if sl <= tick.ask + min_dist:
-            return None, f"SL {sl:.2f} too close to price {tick.ask:.2f}"
-        dist = sl - entry
-    else:
+    if direction == "BUY":
         entry = tick.ask
-        sl = bands['lower'] - buffer_price
-        if entry - sl > max_price_dist:
-            sl = entry - max_price_dist
+        sl = entry - distance
         if sl >= tick.bid - min_dist:
             return None, f"SL {sl:.2f} too close to price {tick.bid:.2f}"
-        dist = entry - sl
+    else:
+        entry = tick.bid
+        sl = entry + distance
+        if sl <= tick.ask + min_dist:
+            return None, f"SL {sl:.2f} too close to price {tick.ask:.2f}"
 
-    return sl, dist * dollars_per_price
+    return sl, distance * dollars_per_price
 
-def open_single_trade(symbol, direction, bands):
-    """Opens one TRADE_VOLUME trade with the Bollinger band stop loss."""
-    sl_price, info = calculate_stop_loss(symbol, direction, bands)
+
+def open_single_trade(symbol, direction):
+    """Opens one TRADE_VOLUME trade with a dynamic $140 stop loss from the entry price."""
+    sl_price, info = calculate_stop_loss(symbol, direction)
     if sl_price is None:
         logger.warning(f"⚠️ {direction} signal skipped: {info}")
         return None, 0.0
@@ -510,24 +493,23 @@ def open_single_trade(symbol, direction, bands):
         order_type=order_type,
         volume=TRADE_VOLUME,
         sl_price=sl_price,
-        comment=f"BB_Near_{direction}"
+        comment=f"BB_Touch_{direction}"
     )
 
     if res:
-        band_name = "Upper" if direction == "SELL" else "Lower"
+        target_name = "Upper" if direction == "BUY" else "Lower"
         logger.info(
             f"🚀 {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} "
-            f"({band_name} band {bands['upper' if direction == 'SELL' else 'lower']:.2f} + ${SL_BUFFER_USD:.0f} buffer) | "
-            f"Risk ≈ ${expected_loss:.2f} | Target: {'Lower' if direction == 'SELL' else 'Upper'} band "
-            f"{bands['lower' if direction == 'SELL' else 'upper']:.2f}"
+            f"(-${expected_loss:.2f}) | Target: {target_name} band (opposite band)"
         )
         send_push_notification(
             f"🟢 {direction} Placed",
-            f"{symbol} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} (risk ≈ ${expected_loss:.0f}) | "
-            f"Target: opposite band"
+            f"{symbol} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} "
+            f"(risk ${expected_loss:.0f}) | Target: opposite band"
         )
         return res, fill_price
     return None, 0.0
+
 
 def check_challenge_limits(symbol):
     """MONITORING ONLY - Checks challenge limits and sends notifications. Does NOT stop the bot."""
@@ -572,10 +554,10 @@ def check_challenge_limits(symbol):
     elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False
 
+
 def forget_ticket(ticket):
-    trade_peak_profit.pop(ticket, None)
-    trade_lock_armed.pop(ticket, None)
     trade_info.pop(ticket, None)
+
 
 def get_closed_position_pnl(ticket):
     """Realized P&L of a closed position from the deal history (None if not found)."""
@@ -587,55 +569,26 @@ def get_closed_position_pnl(ticket):
         return None
     return sum(d.profit + d.swap + getattr(d, 'commission', 0.0) for d in deals if d.entry == mt5.DEAL_ENTRY_OUT)
 
-def start_loss_pause(direction, pnl):
-    """After a losing trade: no new trades until price crosses the middle band."""
-    global loss_pause_side
-    if not PAUSE_AFTER_LOSS:
-        return
-    loss_pause_side = direction
-    side_txt = "falls BELOW" if direction == "SELL" else "rises ABOVE"
-    logger.warning(f"⏸️ Losing {direction} closed at ${pnl:.2f}. Trading PAUSED until price {side_txt} the middle band.")
-    send_push_notification(
-        "⏸️ Trading Paused",
-        f"Losing {direction} closed at ${pnl:.2f}. Waiting until price {side_txt} the middle band."
-    )
 
-def loss_pause_active(symbol):
-    """True while the pause is active. Clears the pause once price crossed the middle band."""
-    global loss_pause_side, last_pause_log_time
-    if loss_pause_side is None:
-        return False
+def close_trade(symbol, pos, title, reason, pnl):
+    """Closes a bot trade and sends a notification."""
+    global last_close_time
+    trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+    logger.info(f"🎯 {reason} on #{pos.ticket}: P&L ${pnl:.2f}. Closing...")
+    send_push_notification(title, f"{symbol} {trade_dir} #{pos.ticket} closed at ${pnl:.2f}. {reason}.")
+    close_position_with_retry(symbol, pos, f"{reason} ${pnl:.2f}")
+    forget_ticket(pos.ticket)
+    last_close_time = time.time()
 
-    df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
-    tick = mt5.symbol_info_tick(symbol)
-    if df.empty or tick is None or pd.isna(df.iloc[-1]['middle']):
-        return True
-    middle = float(df.iloc[-1]['middle'])
-    price = (tick.bid + tick.ask) / 2.0
-
-    crossed = price < middle if loss_pause_side == "SELL" else price > middle
-    if crossed:
-        logger.info(f"▶️ Price {price:.2f} crossed the middle band {middle:.2f}. Trading RESUMED.")
-        send_push_notification("▶️ Trading Resumed", f"{symbol} price {price:.2f} crossed the middle band {middle:.2f}.")
-        loss_pause_side = None
-        return False
-
-    now = time.time()
-    if now - last_pause_log_time >= 15:
-        last_pause_log_time = now
-        need = "below" if loss_pause_side == "SELL" else "above"
-        logger.info(f"⏸️ Paused after losing {loss_pause_side} | Price {price:.2f}, waiting for {need} middle {middle:.2f}")
-    return True
 
 def manage_position(symbol, pos, bands, tick):
     """
     Manages one open trade. Returns True if it is still open, False if the bot closed it.
-    - Software safety stop at -MAX_LOSS_USD (the broker SL normally closes it first).
-    - Target: closes when price reaches the opposite band.
-    - Before the middle band: peak lock (arms at +$15, closes at max($5, peak - $10)).
-    - After the middle band: peak lock (closes at max($5, peak - $20)).
+    - Take profit: closes when price reaches the OPPOSITE band (BUY -> upper, SELL -> lower).
+    - Backup stop: closes at -$140 if the broker SL failed (the broker SL normally closes first).
+    The middle band does not affect the exit.
     """
-    global last_close_time, last_status_log_time
+    global last_status_log_time
 
     ticket = pos.ticket
     pnl = pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
@@ -643,76 +596,34 @@ def manage_position(symbol, pos, bands, tick):
     trade_dir = "BUY" if is_buy else "SELL"
     trade_info[ticket] = (trade_dir, pnl)
 
-    # 1. Software safety stop
+    # 1. Backup stop loss (-$140)
     if MAX_LOSS_USD > 0 and pnl <= -MAX_LOSS_USD:
-        logger.warning(f"🛑 Safety Stop: #{ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
-        send_push_notification("🛑 Safety Stop Triggered", f"{symbol} #{ticket} closed at ${pnl:.2f} (limit -${MAX_LOSS_USD:.0f}).")
-        close_position_with_retry(symbol, pos, f"Safety stop ${pnl:.2f}")
-        forget_ticket(ticket)
-        last_close_time = time.time()
-        start_loss_pause(trade_dir, pnl)
+        logger.warning(f"🛑 Backup Stop: #{ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
+        close_trade(symbol, pos, "🛑 Stop Loss Triggered", f"Backup stop -${MAX_LOSS_USD:.0f}", pnl)
         return False
 
-    # 2. Peak profit tracking
-    peak = max(trade_peak_profit.get(ticket, pnl), pnl)
-    trade_peak_profit[ticket] = peak
-
-    def close_with_profit(title, reason):
-        global last_close_time
-        logger.info(f"🎯 {reason} on #{ticket}: P&L ${pnl:.2f} (peak ${peak:.2f}). Closing...")
-        send_push_notification(title, f"{symbol} {trade_dir} #{ticket} closed at ${pnl:.2f} (peak ${peak:.2f}). {reason}.")
-        close_position_with_retry(symbol, pos, f"{reason} ${pnl:.2f}")
-        forget_ticket(ticket)
-        last_close_time = time.time()
-        if pnl < 0:
-            start_loss_pause(trade_dir, pnl)
-
-    middle = bands['middle'] if bands else None
-    target_band = (bands['upper'] if is_buy else bands['lower']) if bands else None
-    price = (tick.bid if is_buy else tick.ask) if tick is not None else 0.0
-
-    # 3. TARGET: price reached the opposite band -> close
-    if target_band is not None and tick is not None:
+    # 2. Take profit: price reached the opposite band
+    target_band = None
+    price = 0.0
+    if bands is not None and tick is not None:
+        target_band = bands['upper'] if is_buy else bands['lower']
+        price = tick.bid if is_buy else tick.ask
         hit = price >= target_band if is_buy else price <= target_band
-        if hit and pnl > 0:
-            close_with_profit("🏁 Target Band Reached!", f"Opposite band {target_band:.2f} reached")
+        if hit:
+            close_trade(symbol, pos, "🏁 Target Band Reached!", f"Opposite band {target_band:.2f} reached", pnl)
             return False
 
-    # 4. Passed the middle band -> late phase (sticky)
-    if middle is not None and tick is not None and not trade_lock_armed.get(ticket):
-        past_middle = price > middle if is_buy else price < middle
-        if past_middle:
-            trade_lock_armed[ticket] = True
-            logger.info(f"➡️ #{ticket} passed the middle band {middle:.2f} at P&L ${pnl:.2f}. Now aiming for the opposite band.")
-
-    # 5. Peak-profit lock if price turns back
-    if trade_lock_armed.get(ticket):
-        lock_level = max(EARLY_MIN_PROFIT_USD, peak - PEAK_DROP_USD)
-        if peak > lock_level and pnl <= lock_level:
-            close_with_profit("🎯 Profit Locked!", "Turned back after middle band")
-            return False
-        phase = f"after middle, closes at ${lock_level:.2f}" if peak > lock_level else "after middle, waiting for profit"
-    else:
-        lock_level = max(EARLY_MIN_PROFIT_USD, peak - EARLY_DROP_USD)
-        if peak >= EARLY_ARM_PROFIT_USD:
-            if pnl <= lock_level:
-                close_with_profit("🎯 Early Profit Locked", "Turned back before middle band")
-                return False
-            phase = f"before middle, closes at ${lock_level:.2f}"
-        else:
-            phase = f"before middle, lock arms at peak ${EARLY_ARM_PROFIT_USD:.0f}"
-
-    # 6. Status log every 10 seconds
+    # 3. Status log every 10 seconds
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         tgt = f"{target_band:.2f}" if target_band is not None else "n/a"
-        mid = f"{middle:.2f}" if middle is not None else "n/a"
         logger.info(
             f"📈 #{ticket} {trade_dir} {pos.volume} lots @ {pos.price_open:.2f} | Price {price:.2f} | "
-            f"Mid {mid} | Target {tgt} | P&L ${pnl:.2f} (Peak ${peak:.2f}) | SL {pos.sl:.2f} | {phase}"
+            f"Target {tgt} | P&L ${pnl:.2f} | SL {pos.sl:.2f}"
         )
     return True
+
 
 def manage_active_trade(symbol):
     """
@@ -734,8 +645,6 @@ def manage_active_trade(symbol):
             logger.warning(f"🛡️ #{ticket} {direction} closed by broker at ${closed_pnl:.2f}.")
             send_push_notification("🛡️ Closed by Broker", f"{symbol} {direction} #{ticket} closed at ${closed_pnl:.2f} (stop loss).")
             last_close_time = time.time()
-            if closed_pnl < 0:
-                start_loss_pause(direction, closed_pnl)
         forget_ticket(ticket)
     known_tickets = current
 
@@ -745,7 +654,7 @@ def manage_active_trade(symbol):
 
     if len(positions) > 1 and not multi_position_warned:
         multi_position_warned = True
-        logger.warning(f"⚠️ {len(positions)} bot positions open (e.g. leftovers from the old hedge version). Managing each one; no new trades until all are closed.")
+        logger.warning(f"⚠️ {len(positions)} bot positions open. Managing each one; no new trades until all are closed.")
         send_push_notification(
             "⚠️ Several Positions Open",
             f"{len(positions)} {symbol} bot positions are open. Each is managed separately; no new trade until all close."
@@ -764,6 +673,7 @@ def manage_active_trade(symbol):
             still_open = True
     return still_open
 
+
 def run_bot():
     """Main execution loop for the $5K Challenge XAUUSD M5 single-trade bot."""
     global last_close_time, last_processed_candle_time, phase1_announced
@@ -778,19 +688,15 @@ def run_bot():
         mt5.shutdown()
         return
 
-    buffer_price = SL_BUFFER_USD / (TRADE_VOLUME * get_contract_size(symbol_info))
-
     logger.info("=" * 65)
     logger.info(f"🚀 Started $5K Challenge {SYMBOL} Single-Trade Bot (NO hedging)")
     logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Entry: candle near UPPER band -> SELL, near LOWER band -> BUY (near = {NEAR_BAND_FRACTION:.0%} of band width)")
+    logger.info(f"Entry: candle touches UPPER band and closes back inside -> SELL | "
+                f"touches LOWER band and closes back inside -> BUY")
     logger.info(f"Lot: {TRADE_VOLUME} | One trade at a time")
-    logger.info(f"Stop Loss: band ± ${SL_BUFFER_USD:.0f} buffer (= ${buffer_price:.2f} gold) | Max SL risk ${MAX_SL_LOSS_USD:.0f}")
-    logger.info(f"Exit: target = opposite band | turns back before middle: arms at peak ${EARLY_ARM_PROFIT_USD:.0f}, "
-                f"closes at max(${EARLY_MIN_PROFIT_USD:.0f}, peak - ${EARLY_DROP_USD:.0f}) | "
-                f"turns back after middle: closes at max(${EARLY_MIN_PROFIT_USD:.0f}, peak - ${PEAK_DROP_USD:.0f})")
-    logger.info(f"Safety Stop: close trade at -${MAX_LOSS_USD:.2f}")
-    logger.info(f"Pause after loss: {'ON' if PAUSE_AFTER_LOSS else 'OFF'} (no new trade until price crosses the middle band)")
+    logger.info(f"Stop Loss: dynamic from entry, -${STOP_LOSS_USD:.0f}")
+    logger.info(f"Take Profit: opposite band (BUY -> upper, SELL -> lower). Middle band ignored for exits.")
+    logger.info(f"Backup Stop: close trade at -${MAX_LOSS_USD:.2f}")
     logger.info(f"⚠️ MONITORING (alerts only):")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
@@ -801,9 +707,9 @@ def run_bot():
 
     send_push_notification(
         "🚀 5K Bot Online",
-        f"Single-trade bot active on {SYMBOL} (M5), no hedging. Near band {NEAR_BAND_FRACTION:.0%}, "
-        f"max loss ${MAX_SL_LOSS_USD:.0f}, pause after loss until middle band. SL band ± ${SL_BUFFER_USD:.0f}, "
-        f"target opposite band with peak-profit lock."
+        f"Single-trade bot active on {SYMBOL} (M5), {TRADE_VOLUME} lots, no hedging. "
+        f"Entry: Bollinger touch + close back inside. SL -${STOP_LOSS_USD:.0f} from entry, "
+        f"TP at opposite band."
     )
 
     try:
@@ -835,18 +741,13 @@ def run_bot():
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 5. Paused after a losing trade -> wait until price crosses the middle band
-            if loss_pause_active(SYMBOL):
-                time.sleep(SLEEP_INTERVAL)
-                continue
-
-            # 6. "Near the band" entry signal on candle shift 1
-            signal, candle_time, bands = check_bb_entry_signal(SYMBOL, TIMEFRAME)
+            # 5. Bollinger touch + close-inside signal on the last completed candle (shift 1)
+            signal, candle_time, _ = check_bb_entry_signal(SYMBOL, TIMEFRAME)
 
             if signal and (last_processed_candle_time != candle_time):
                 last_processed_candle_time = candle_time   # one attempt per candle
                 logger.info(f"📊 M5 Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
-                open_single_trade(SYMBOL, signal, bands)
+                open_single_trade(SYMBOL, signal)
 
             time.sleep(SLEEP_INTERVAL)
 
@@ -857,6 +758,7 @@ def run_bot():
     finally:
         mt5.shutdown()
         logger.info("MT5 connection closed gracefully.")
+
 
 if __name__ == "__main__":
     run_bot()
