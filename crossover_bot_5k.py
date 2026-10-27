@@ -32,52 +32,69 @@ NTFY_TOPIC = "tradingbot_5k_ivaylo"    # Topic for ntfy mobile app (https://ntfy
 SYMBOL = "XAUUSD"                   # Gold Bot
 TIMEFRAME = mt5.TIMEFRAME_M5        # M5 Timeframe
 SLEEP_INTERVAL = 1                  # 1 second loop interval
-COOLDOWN_SECONDS = 60               # Cooldown between completed trades
+COOLDOWN_SECONDS = 60               # Cooldown between completed trade cycles
 MAGIC_NUMBER = 60020                # Unique identifier for this bot's orders
 DEVIATION = 20                      # Maximum price slippage in points
 
-# --- Strategy Parameters: Bollinger Bands (original logic) ---
+# --- Strategy Parameters: Bollinger Bands ---
 BB_PERIOD = 20                      # Period 20
 BB_DEVIATION = 2.0                  # Deviation 2.0
-BB_SHIFT = 0                        # Shift 0
 # Applied Price: Close
 AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Entry Signal (original Bollinger band logic) ---
-# Checked on the last COMPLETED M5 candle (shift 1), using the bands of that same candle.
-#   SELL: candle HIGH touched or pierced the UPPER band, and the candle CLOSED back inside the bands
-#         (below the upper band).
-#   BUY:  candle LOW touched or pierced the LOWER band, and the candle CLOSED back inside the bands
-#         (above the lower band).
-# The trade is opened only after the candle has actually made that movement.
+# --- Entry Logic (breakout -> reversal candle back inside) ---
+# Step 1: a COMPLETED M5 candle CLOSES OUTSIDE a band.
+#         close above UPPER -> SELL setup armed
+#         close below LOWER -> BUY setup armed
+# Step 2: the NEXT completed candle (the reversal candle) must:
+#         SELL: OPEN above the UPPER band AND CLOSE back below the UPPER band
+#         BUY:  OPEN below the LOWER band AND CLOSE back above the LOWER band
+#         -> valid signal, trade opens at the start of the following candle.
+# Other outcomes:
+#         SELL: reversal candle still closes above UPPER -> stays armed (waits for another candle)
+#         SELL: reversal candle OPENS inside the band      -> setup cancelled (re-checked as a new breakout)
+#         BUY: mirrored.
 
 # --- Trade Size & Stop Loss ---
-# ONE ORDER AT A TIME. No hedging. A new trade opens only when no bot position is open.
-TRADE_VOLUME = 0.10                 # Lot size for every trade
+TRADE_VOLUME = 0.10                 # Lot size of the main trade
+STOP_LOSS_USD = 140.0               # Broker stop loss in account dollars from the MAIN trade entry
+MAX_LOSS_USD = 140.0                # Software backup stop for a SINGLE (unhedged) trade
 
-# Stop loss is calculated dynamically from the ENTRY price:
-#   BUY:  SL = entry - distance
-#   SELL: SL = entry + distance
-# distance = STOP_LOSS_USD / (lot size * contract size)
-#   With 0.10 lots on XAUUSD (100 oz/lot): $1 gold move = $10, so $140 loss = $14 price distance.
-STOP_LOSS_USD = 140.0               # Stop loss in account dollars from the entry price
-MAX_LOSS_USD = 140.0                # Software backup stop: closes the trade at -$140 if the broker SL fails
+# --- Hedge ---
+HEDGE_TRIGGER_LOSS_USD = 70.0       # When the single main trade reaches -$70, open the hedge
+HEDGE_VOLUME = 0.20                 # Lot size of the hedge (opposite direction)
+HEDGE_STOP_LOSS_USD = 100.0         # Broker stop loss in account dollars from the HEDGE entry
+HEDGE_RETRY_SECONDS = 30            # If the hedge order fails, wait this long before retrying
 
-# --- Take Profit ---
-# Take profit = the OPPOSITE band, checked on the current price:
+# --- Cycle Rules ---
+# A cycle is the main trade plus, optionally, one hedge.
+# If ANY trade of the cycle is closed by its broker stop loss, the rest of the cycle is closed too.
+
+# --- Basket Rules (apply while hedged) ---
+# Combined P&L of ALL open cycle trades:
+#   >= +BASKET_PROFIT_USD  -> close all trades
+#   <= -BASKET_STOP_USD    -> close all trades
+BASKET_PROFIT_USD = 10.0
+BASKET_STOP_USD = 120.0
+
+# --- Take Profit (single trade only, not hedged) ---
 #   BUY  closes when price reaches the UPPER band
 #   SELL closes when price reaches the LOWER band
 # The middle band does not affect the exit.
 
+# --- Risk Limits (MONITORING ONLY, the bot never stops because of these) ---
+# Max loss per cycle: -$150 (checked in check_challenge_limits)
+
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
-last_processed_candle_time = None   # Timestamp of last candle a trade was attempted on
-last_no_signal_log_time = 0         # Timestamp of last "waiting for signal" log
-last_logged_no_signal_candle = None # Timestamp of last logged candle for no-signal
+last_eval_candle_time = None        # Last completed candle the signal logic evaluated
+armed_side = None                   # 'SELL', 'BUY' or None (breakout waiting for reversal)
 last_status_log_time = 0            # Timestamp of periodic open trade status log
+last_wait_log_time = 0              # Timestamp of last "waiting" log
+last_hedge_attempt_time = 0         # Timestamp of last hedge attempt
 known_tickets = set()               # Tickets seen on the previous loop (detects broker SL closes)
-multi_position_warned = False       # Warned once that more than one position is open
 trade_info = {}                     # {ticket: (direction, last P&L)} for detecting closes by broker
+hedge_opened = False                # True once the hedge is open in the current cycle
 phase1_announced = False            # Prevents Phase 1 banner from logging every second
 
 # --- Limit Monitoring & Safety State Flags ---
@@ -187,6 +204,11 @@ def get_contract_size(symbol_info):
     return getattr(symbol_info, 'trade_contract_size', 100.0) or 100.0
 
 
+def get_position_pnl(pos):
+    """Floating P&L of an open position including swap and commission."""
+    return pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
+
+
 def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     """
     Fetches OHLC data and calculates Bollinger Bands:
@@ -206,63 +228,94 @@ def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     return df
 
 
-def check_bb_entry_signal(symbol, timeframe=TIMEFRAME):
+def check_bb_entry_signal(symbol):
     """
-    Original Bollinger band logic on the last COMPLETED candle (shift 1):
-    - SELL: candle high touched/pierced the UPPER band and closed back inside the bands.
-    - BUY:  candle low touched/pierced the LOWER band and closed back inside the bands.
-    Returns: (signal, candle_time, None) where signal is 'BUY', 'SELL' or None.
+    Breakout + reversal candle logic. Evaluated once per COMPLETED M5 candle (iloc[-2]).
+    - Breakout: candle closes above UPPER -> arm SELL; closes below LOWER -> arm BUY.
+    - Reversal (SELL): next completed candle OPENS above UPPER and CLOSES below UPPER -> SELL signal.
+      Still closes above UPPER -> stays armed. Opens inside the band -> cancelled.
+    - Reversal (BUY): mirrored with LOWER.
+    Returns: (signal, candle_time) where signal is 'BUY', 'SELL' or None.
     """
-    global last_no_signal_log_time, last_logged_no_signal_candle
+    global armed_side, last_eval_candle_time, last_wait_log_time
 
-    df = get_bollinger_bands(symbol, timeframe, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
+    df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
     if df.empty or len(df) < BB_PERIOD + 2:
-        return None, None, None
+        return None, None
 
-    # iloc[-1] = shift 0 (current, incomplete), iloc[-2] = shift 1 (last completed)
-    c = df.iloc[-2]
+    c = df.iloc[-2]     # last COMPLETED candle
     candle_time = c['time']
-    c_high, c_low, c_close = c['high'], c['low'], c['close']
-    c_upper, c_lower, c_middle = c['upper'], c['lower'], c['middle']
 
-    if pd.isna(c_upper) or pd.isna(c_lower) or pd.isna(c_middle):
-        return None, None, None
+    if pd.isna(c['upper']) or pd.isna(c['lower']):
+        return None, candle_time
 
-    touched_upper = c_high >= c_upper
-    touched_lower = c_low <= c_lower
-    closed_inside = c_lower < c_close < c_upper
+    # Each completed candle is evaluated exactly once
+    if candle_time == last_eval_candle_time:
+        return None, candle_time
+    last_eval_candle_time = candle_time
 
-    sell_signal = touched_upper and closed_inside and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]
-    buy_signal = touched_lower and closed_inside and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]
+    o, cl = c['open'], c['close']
+    up, lo, mid = c['upper'], c['lower'], c['middle']
+    signal = None
 
-    if sell_signal and not buy_signal:
-        logger.info(
-            f"🔴 SELL Signal (candle touched UPPER band, closed back inside) [{candle_time}] | "
-            f"High: {c_high:.2f} >= Upper {c_upper:.2f} | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
-        )
-        return 'SELL', candle_time, None
-    if buy_signal and not sell_signal:
-        logger.info(
-            f"🟢 BUY Signal (candle touched LOWER band, closed back inside) [{candle_time}] | "
-            f"Low: {c_low:.2f} <= Lower {c_lower:.2f} | Close: {c_close:.2f} | Mid: {c_middle:.2f}"
-        )
-        return 'BUY', candle_time, None
+    # 1. Check the reversal candle against an armed setup
+    if armed_side == 'SELL':
+        if o > up and cl < up:
+            signal = 'SELL'
+            logger.info(
+                f"🔴 SELL Signal: reversal candle [{candle_time}] opened above upper {up:.2f} "
+                f"and closed back below it (Open {o:.2f}, Close {cl:.2f})"
+            )
+            armed_side = None
+        elif o > up and cl >= up:
+            logger.info(f"⏳ Reversal candle [{candle_time}] still above upper {up:.2f}. SELL setup stays armed.")
+        else:
+            logger.info(f"↩️ Candle [{candle_time}] opened inside upper band {up:.2f}. SELL setup cancelled.")
+            armed_side = None
 
-    now = time.time()
-    if (candle_time != last_logged_no_signal_candle) or (now - last_no_signal_log_time >= 15):
-        last_no_signal_log_time = now
-        last_logged_no_signal_candle = candle_time
-        logger.info(
-            f"⏳ Waiting for a signal (Bollinger touch + close inside, M5) | Shift 1 [{candle_time}] "
-            f"High: {c_high:.2f}, Low: {c_low:.2f}, Close: {c_close:.2f} | "
-            f"Lower: {c_lower:.2f}, Mid: {c_middle:.2f}, Upper: {c_upper:.2f}"
-        )
+    elif armed_side == 'BUY':
+        if o < lo and cl > lo:
+            signal = 'BUY'
+            logger.info(
+                f"🟢 BUY Signal: reversal candle [{candle_time}] opened below lower {lo:.2f} "
+                f"and closed back above it (Open {o:.2f}, Close {cl:.2f})"
+            )
+            armed_side = None
+        elif o < lo and cl <= lo:
+            logger.info(f"⏳ Reversal candle [{candle_time}] still below lower {lo:.2f}. BUY setup stays armed.")
+        else:
+            logger.info(f"↩️ Candle [{candle_time}] opened inside lower band {lo:.2f}. BUY setup cancelled.")
+            armed_side = None
 
-    return None, candle_time, None
+    # 2. Breakout check (only when no setup is armed and no signal was just produced)
+    if signal is None and armed_side is None:
+        if cl > up and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]:
+            armed_side = 'SELL'
+            logger.info(
+                f"👀 Breakout UP: candle [{candle_time}] closed above upper {up:.2f} "
+                f"(Close {cl:.2f}). Waiting for a reversal candle."
+            )
+        elif cl < lo and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]:
+            armed_side = 'BUY'
+            logger.info(
+                f"👀 Breakout DOWN: candle [{candle_time}] closed below lower {lo:.2f} "
+                f"(Close {cl:.2f}). Waiting for a reversal candle."
+            )
+
+    if signal is None and armed_side is None:
+        now = time.time()
+        if now - last_wait_log_time >= 15:
+            last_wait_log_time = now
+            logger.info(
+                f"⏳ Waiting for breakout | Last candle [{candle_time}] Close {cl:.2f} | "
+                f"Upper {up:.2f}, Mid {mid:.2f}, Lower {lo:.2f}"
+            )
+
+    return signal, candle_time
 
 
 def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Single", notify_on_error=True):
-    """Places a market order with a stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
+    """Places a market order with an optional stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
     action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -302,7 +355,7 @@ def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Singl
         "type": order_type,
         "price": price,
         "sl": float(sl),
-        "tp": 0.0,                      # Take profit is managed by the bot (opposite band)
+        "tp": 0.0,                      # Take profit is managed by the bot
         "magic": MAGIC_NUMBER,
         "comment": comment,
         "deviation": DEVIATION,
@@ -382,7 +435,7 @@ def close_position(symbol, position):
         request["type_filling"] = mode
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            logger.info(f"Closed #{position.ticket} at {price} (Profit: ${position.profit:.2f})")
+            logger.info(f"Closed #{position.ticket} at {price} (Profit: ${get_position_pnl(position):.2f})")
             return True
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue
@@ -445,12 +498,12 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
     return total_pnl
 
 
-def calculate_stop_loss(symbol, direction):
+def calculate_stop_loss(symbol, direction, volume, stop_usd):
     """
     Dynamic stop loss from the ENTRY price (current tick):
       BUY:  SL = entry - distance
       SELL: SL = entry + distance
-    distance = STOP_LOSS_USD / (lot size * contract size)
+    distance = stop_usd / (volume * contract size)
     e.g. 0.10 lots, 100 oz: $140 / (0.10 * 100) = $14.00 gold price distance.
     Returns (sl_price, expected_loss_usd) or (None, reason) if no valid SL is possible.
     """
@@ -459,53 +512,53 @@ def calculate_stop_loss(symbol, direction):
     if not symbol_info or not tick:
         return None, "no symbol/tick data"
 
-    volume = normalize_volume(symbol_info, TRADE_VOLUME)
-    dollars_per_price = volume * get_contract_size(symbol_info)   # $10 per $1 gold at 0.10 lots
-    distance = STOP_LOSS_USD / dollars_per_price
+    vol = normalize_volume(symbol_info, volume)
+    dollars_per_price = vol * get_contract_size(symbol_info)
+    distance = stop_usd / dollars_per_price
     point = getattr(symbol_info, 'point', 0.01)
     min_dist = max((getattr(symbol_info, 'trade_stops_level', 0) or 0) * point, point * 10)
 
     if direction == "BUY":
-        entry = tick.ask
-        sl = entry - distance
+        sl = tick.ask - distance
         if sl >= tick.bid - min_dist:
             return None, f"SL {sl:.2f} too close to price {tick.bid:.2f}"
     else:
-        entry = tick.bid
-        sl = entry + distance
+        sl = tick.bid + distance
         if sl <= tick.ask + min_dist:
             return None, f"SL {sl:.2f} too close to price {tick.ask:.2f}"
 
-    return sl, distance * dollars_per_price
+    return sl, stop_usd
 
 
-def open_single_trade(symbol, direction):
-    """Opens one TRADE_VOLUME trade with a dynamic $140 stop loss from the entry price."""
-    sl_price, info = calculate_stop_loss(symbol, direction)
-    if sl_price is None:
-        logger.warning(f"⚠️ {direction} signal skipped: {info}")
-        return None, 0.0
-    expected_loss = info
+def open_trade(symbol, direction, volume, stop_usd, comment):
+    """
+    Opens one market trade with a dynamic dollar stop loss from the entry price.
+    If stop_usd is None, the trade has no broker stop loss.
+    Returns (result, fill_price) or (None, 0.0).
+    """
+    if stop_usd is not None:
+        sl_price, info = calculate_stop_loss(symbol, direction, volume, stop_usd)
+        if sl_price is None:
+            logger.warning(f"⚠️ {direction} {volume} lots skipped: {info}")
+            return None, 0.0
+    else:
+        sl_price, info = 0.0, 0.0
 
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     res, fill_price = place_order_safe(
         symbol=symbol,
         order_type=order_type,
-        volume=TRADE_VOLUME,
+        volume=volume,
         sl_price=sl_price,
-        comment=f"BB_Touch_{direction}"
+        comment=comment
     )
 
     if res:
-        target_name = "Upper" if direction == "BUY" else "Lower"
-        logger.info(
-            f"🚀 {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} "
-            f"(-${expected_loss:.2f}) | Target: {target_name} band (opposite band)"
-        )
+        sl_txt = f"SL {sl_price:.2f} (-${info:.2f})" if sl_price else "no broker SL"
+        logger.info(f"🚀 {direction} {volume} lots @ {fill_price:.2f} | {sl_txt}")
         send_push_notification(
             f"🟢 {direction} Placed",
-            f"{symbol} {direction} {TRADE_VOLUME} lots @ {fill_price:.2f} | SL {sl_price:.2f} "
-            f"(risk ${expected_loss:.0f}) | Target: opposite band"
+            f"{symbol} {direction} {volume} lots @ {fill_price:.2f} | {sl_txt}"
         )
         return res, fill_price
     return None, 0.0
@@ -517,7 +570,7 @@ def check_challenge_limits(symbol):
 
     positions = get_active_positions(symbol)
     daily_realized_pnl = get_daily_realized_pnl(MAGIC_NUMBER)
-    floating_pnl = sum(p.profit + p.swap + getattr(p, 'commission', 0.0) for p in positions)
+    floating_pnl = sum(get_position_pnl(p) for p in positions)
     total_today_pnl = daily_realized_pnl + floating_pnl
     cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
 
@@ -543,7 +596,7 @@ def check_challenge_limits(symbol):
     elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD + 50.0 and limit_notified_total:
         limit_notified_total = False
 
-    # 3. Max Risk / Floating Drawdown Limit (-$150)
+    # 3. Max Risk / Floating Drawdown Limit (-$150 per cycle)
     current_loss = min(floating_pnl, total_today_pnl)
     if current_loss <= -MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
         limit_notified_max_risk = True
@@ -571,7 +624,7 @@ def get_closed_position_pnl(ticket):
 
 
 def close_trade(symbol, pos, title, reason, pnl):
-    """Closes a bot trade and sends a notification."""
+    """Closes one bot trade and sends a notification."""
     global last_close_time
     trade_dir = "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL"
     logger.info(f"🎯 {reason} on #{pos.ticket}: P&L ${pnl:.2f}. Closing...")
@@ -581,28 +634,54 @@ def close_trade(symbol, pos, title, reason, pnl):
     last_close_time = time.time()
 
 
-def manage_position(symbol, pos, bands, tick):
+def close_basket(symbol, positions, title, reason, basket_pnl):
+    """Closes every trade of the current cycle together."""
+    global last_close_time
+    logger.info(f"🎯 {reason}. Closing {len(positions)} trade(s), basket ${basket_pnl:.2f}...")
+    send_push_notification(
+        title,
+        f"{symbol} closing {len(positions)} trade(s), basket ${basket_pnl:.2f}. {reason}."
+    )
+    for pos in positions:
+        close_position_with_retry(symbol, pos, f"{reason} basket ${basket_pnl:.2f}")
+        forget_ticket(pos.ticket)
+    last_close_time = time.time()
+
+
+def open_hedge(symbol, main_pos):
+    """Opens the opposite-direction hedge (HEDGE_VOLUME lots) with its own -$100 broker stop loss."""
+    direction = "SELL" if main_pos.type == mt5.POSITION_TYPE_BUY else "BUY"
+    pnl = get_position_pnl(main_pos)
+    logger.warning(
+        f"🛡️ HEDGE: #{main_pos.ticket} at ${pnl:.2f}. Opening {direction} {HEDGE_VOLUME} lots "
+        f"(SL -${HEDGE_STOP_LOSS_USD:.0f} from hedge entry, basket +${BASKET_PROFIT_USD:.0f} / -${BASKET_STOP_USD:.0f})."
+    )
+    send_push_notification(
+        "🛡️ Hedge Opened",
+        f"{symbol} main #{main_pos.ticket} at ${pnl:.2f}. Opening {direction} {HEDGE_VOLUME} lots. "
+        f"Hedge SL -${HEDGE_STOP_LOSS_USD:.0f}. Basket closes at +${BASKET_PROFIT_USD:.0f} or -${BASKET_STOP_USD:.0f}."
+    )
+    res, _ = open_trade(symbol, direction, HEDGE_VOLUME, HEDGE_STOP_LOSS_USD, f"BB_Hedge_{direction}")
+    return res is not None
+
+
+def manage_single(symbol, pos, bands, tick):
     """
-    Manages one open trade. Returns True if it is still open, False if the bot closed it.
-    - Take profit: closes when price reaches the OPPOSITE band (BUY -> upper, SELL -> lower).
-    - Backup stop: closes at -$140 if the broker SL failed (the broker SL normally closes first).
-    The middle band does not affect the exit.
+    Manages one trade while NOT hedged. Returns True if still open, False if the bot closed it.
+    - Backup stop at -$140 (broker SL normally closes first).
+    - Take profit at the OPPOSITE band (BUY -> upper, SELL -> lower).
     """
     global last_status_log_time
 
-    ticket = pos.ticket
-    pnl = pos.profit + pos.swap + getattr(pos, 'commission', 0.0)
+    pnl = get_position_pnl(pos)
     is_buy = pos.type == mt5.POSITION_TYPE_BUY
     trade_dir = "BUY" if is_buy else "SELL"
-    trade_info[ticket] = (trade_dir, pnl)
 
-    # 1. Backup stop loss (-$140)
     if MAX_LOSS_USD > 0 and pnl <= -MAX_LOSS_USD:
-        logger.warning(f"🛑 Backup Stop: #{ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
+        logger.warning(f"🛑 Backup Stop: #{pos.ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
         close_trade(symbol, pos, "🛑 Stop Loss Triggered", f"Backup stop -${MAX_LOSS_USD:.0f}", pnl)
         return False
 
-    # 2. Take profit: price reached the opposite band
     target_band = None
     price = 0.0
     if bands is not None and tick is not None:
@@ -613,29 +692,62 @@ def manage_position(symbol, pos, bands, tick):
             close_trade(symbol, pos, "🏁 Target Band Reached!", f"Opposite band {target_band:.2f} reached", pnl)
             return False
 
-    # 3. Status log every 10 seconds
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
         tgt = f"{target_band:.2f}" if target_band is not None else "n/a"
         logger.info(
-            f"📈 #{ticket} {trade_dir} {pos.volume} lots @ {pos.price_open:.2f} | Price {price:.2f} | "
-            f"Target {tgt} | P&L ${pnl:.2f} | SL {pos.sl:.2f}"
+            f"📈 #{pos.ticket} {trade_dir} {pos.volume} lots @ {pos.price_open:.2f} | Price {price:.2f} | "
+            f"Target {tgt} | P&L ${pnl:.2f} | SL {pos.sl:.2f} | single"
         )
+    return True
+
+
+def manage_basket(symbol, positions):
+    """
+    Manages the hedged cycle as one basket. Returns True if still open, False if closed.
+    - Close all when the combined P&L >= +$10.
+    - Close all when the combined P&L <= -$120.
+    """
+    global last_status_log_time
+
+    basket = sum(get_position_pnl(p) for p in positions)
+
+    if basket >= BASKET_PROFIT_USD:
+        close_basket(symbol, positions, "✅ Basket Profit", f"Basket profit >= ${BASKET_PROFIT_USD:.0f}", basket)
+        return False
+
+    if basket <= -BASKET_STOP_USD:
+        close_basket(symbol, positions, "🛑 Basket Stop", f"Basket loss <= -${BASKET_STOP_USD:.0f}", basket)
+        return False
+
+    now = time.time()
+    if now - last_status_log_time >= 10:
+        last_status_log_time = now
+        parts = " | ".join(
+            f"#{p.ticket} {'BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL'} {p.volume} @ {p.price_open:.2f} "
+            f"P&L ${get_position_pnl(p):.2f}"
+            for p in positions
+        )
+        logger.info(f"📈 HEDGED | Basket ${basket:.2f} (close at +${BASKET_PROFIT_USD:.0f} / -${BASKET_STOP_USD:.0f}) | {parts}")
     return True
 
 
 def manage_active_trade(symbol):
     """
-    Manages the open trade (one at a time, no hedging).
-    Returns True while any bot position is open, False when none is open.
+    Manages the open cycle. Returns True while any bot position is open, False when none is open.
+    - Broker stop loss hit on any cycle trade -> close the rest of the cycle.
+    - Hedge trigger: single trade at -$70 -> open the hedge (once per cycle).
+    - Hedged: basket rules (+$10 / -$120 combined).
+    - Not hedged: single trade rules (backup stop and opposite band).
     """
-    global last_close_time, known_tickets, multi_position_warned
+    global known_tickets, hedge_opened, last_close_time, last_hedge_attempt_time
 
     positions = get_active_positions(symbol)
     current = set(p.ticket for p in positions)
 
-    # Positions that disappeared without the bot closing them -> broker stop loss hit
+    # Trades that disappeared without the bot closing them -> broker stop loss hit
+    broker_closed = []
     for ticket in known_tickets - current:
         if ticket in trade_info:
             direction, last_pnl = trade_info[ticket]
@@ -644,39 +756,51 @@ def manage_active_trade(symbol):
                 closed_pnl = last_pnl
             logger.warning(f"🛡️ #{ticket} {direction} closed by broker at ${closed_pnl:.2f}.")
             send_push_notification("🛡️ Closed by Broker", f"{symbol} {direction} #{ticket} closed at ${closed_pnl:.2f} (stop loss).")
+            broker_closed.append((ticket, direction, closed_pnl))
             last_close_time = time.time()
         forget_ticket(ticket)
     known_tickets = current
 
     if not positions:
-        multi_position_warned = False
+        hedge_opened = False        # Cycle is over, a new cycle can start
         return False
 
-    if len(positions) > 1 and not multi_position_warned:
-        multi_position_warned = True
-        logger.warning(f"⚠️ {len(positions)} bot positions open. Managing each one; no new trades until all are closed.")
-        send_push_notification(
-            "⚠️ Several Positions Open",
-            f"{len(positions)} {symbol} bot positions are open. Each is managed separately; no new trade until all close."
-        )
+    # One cycle: if a trade was stopped out by the broker, close the remaining trade(s) too
+    if broker_closed:
+        basket = sum(get_position_pnl(p) for p in positions)
+        close_basket(symbol, positions, "🛑 Cycle Closed", "Other trade hit broker stop loss", basket)
+        return False
 
+    # Keep trade_info current for broker-close detection
+    for p in positions:
+        trade_info[p.ticket] = ('BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL', get_position_pnl(p))
+
+    # Hedge trigger
+    if not hedge_opened and len(positions) == 1:
+        main_pos = positions[0]
+        if get_position_pnl(main_pos) <= -HEDGE_TRIGGER_LOSS_USD and time.time() - last_hedge_attempt_time >= HEDGE_RETRY_SECONDS:
+            last_hedge_attempt_time = time.time()
+            if open_hedge(symbol, main_pos):
+                hedge_opened = True
+            return True
+
+    hedged = hedge_opened or len(positions) >= 2
+    if hedged:
+        return manage_basket(symbol, positions)
+
+    tick = mt5.symbol_info_tick(symbol)
     df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
     bands = None
     if not df.empty and not pd.isna(df.iloc[-1]['middle']):
         last = df.iloc[-1]
         bands = {'upper': float(last['upper']), 'middle': float(last['middle']), 'lower': float(last['lower'])}
-    tick = mt5.symbol_info_tick(symbol)
 
-    still_open = False
-    for pos in positions:
-        if manage_position(symbol, pos, bands, tick):
-            still_open = True
-    return still_open
+    return manage_single(symbol, positions[0], bands, tick)
 
 
 def run_bot():
-    """Main execution loop for the $5K Challenge XAUUSD M5 single-trade bot."""
-    global last_close_time, last_processed_candle_time, phase1_announced
+    """Main execution loop for the $5K Challenge XAUUSD M5 breakout + hedge bot."""
+    global last_close_time, phase1_announced
 
     if not mt5.initialize():
         logger.error(f"MT5 initialization failed: {mt5.last_error()}")
@@ -689,27 +813,27 @@ def run_bot():
         return
 
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Single-Trade Bot (NO hedging)")
-    logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Shift 0, Close)")
-    logger.info(f"Entry: candle touches UPPER band and closes back inside -> SELL | "
-                f"touches LOWER band and closes back inside -> BUY")
-    logger.info(f"Lot: {TRADE_VOLUME} | One trade at a time")
-    logger.info(f"Stop Loss: dynamic from entry, -${STOP_LOSS_USD:.0f}")
-    logger.info(f"Take Profit: opposite band (BUY -> upper, SELL -> lower). Middle band ignored for exits.")
-    logger.info(f"Backup Stop: close trade at -${MAX_LOSS_USD:.2f}")
+    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Breakout Bot with Hedge")
+    logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Close)")
+    logger.info(f"Entry: candle closes outside a band -> reversal candle opens outside and closes back inside")
+    logger.info(f"Lot: {TRADE_VOLUME} | Broker SL: -${STOP_LOSS_USD:.0f} from main entry (dynamic)")
+    logger.info(f"Hedge: at -${HEDGE_TRIGGER_LOSS_USD:.0f} open opposite {HEDGE_VOLUME} lots (SL -${HEDGE_STOP_LOSS_USD:.0f} from its entry)")
+    logger.info(f"Basket (hedged): close all at +${BASKET_PROFIT_USD:.0f} combined or -${BASKET_STOP_USD:.0f} combined")
+    logger.info(f"Cycle rule: broker SL on any trade closes the whole cycle")
+    logger.info(f"Single trade: opposite band target | backup stop -${MAX_LOSS_USD:.0f}")
     logger.info(f"⚠️ MONITORING (alerts only):")
     logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
     logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
-    logger.info(f"  - Max Risk at any time: ${MAX_RISK_AT_ANY_TIME_USD:.2f}")
+    logger.info(f"  - Max Risk per cycle: -${MAX_RISK_AT_ANY_TIME_USD:.2f}")
     logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
     logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
     logger.info("=" * 65)
 
     send_push_notification(
         "🚀 5K Bot Online",
-        f"Single-trade bot active on {SYMBOL} (M5), {TRADE_VOLUME} lots, no hedging. "
-        f"Entry: Bollinger touch + close back inside. SL -${STOP_LOSS_USD:.0f} from entry, "
-        f"TP at opposite band."
+        f"Breakout bot active on {SYMBOL} (M5). Main {TRADE_VOLUME} lots, SL -${STOP_LOSS_USD:.0f}. "
+        f"Hedge {HEDGE_VOLUME} lots at -${HEDGE_TRIGGER_LOSS_USD:.0f}, SL -${HEDGE_STOP_LOSS_USD:.0f}. "
+        f"Basket +${BASKET_PROFIT_USD:.0f} / -${BASKET_STOP_USD:.0f}."
     )
 
     try:
@@ -731,23 +855,23 @@ def run_bot():
             # 2. Challenge Limits (MONITORING ONLY)
             check_challenge_limits(SYMBOL)
 
-            # 3. Manage the open trade (one at a time)
+            # 3. Update the breakout / reversal state on every completed candle (always, even while in a trade)
+            signal, candle_time = check_bb_entry_signal(SYMBOL)
+
+            # 4. Manage the open cycle (main trade, hedge, basket)
             if manage_active_trade(SYMBOL):
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 4. Cooldown after a trade closes
+            # 5. Cooldown after a cycle closes
             if time.time() - last_close_time < COOLDOWN_SECONDS:
                 time.sleep(SLEEP_INTERVAL)
                 continue
 
-            # 5. Bollinger touch + close-inside signal on the last completed candle (shift 1)
-            signal, candle_time, _ = check_bb_entry_signal(SYMBOL, TIMEFRAME)
-
-            if signal and (last_processed_candle_time != candle_time):
-                last_processed_candle_time = candle_time   # one attempt per candle
-                logger.info(f"📊 M5 Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
-                open_single_trade(SYMBOL, signal)
+            # 6. Valid reversal signal -> open the main trade
+            if signal:
+                logger.info(f"📊 Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
+                open_trade(SYMBOL, signal, TRADE_VOLUME, STOP_LOSS_USD, f"BB_Breakout_{signal}")
 
             time.sleep(SLEEP_INTERVAL)
 
