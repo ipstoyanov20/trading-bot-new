@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 ACCOUNT_SIZE = 5000.0               # Challenge Account Size ($5,000)
 PHASE_1_TARGET_USD = 400.0          # Phase 1 Target: 8% (+$400.00)
 PHASE_2_TARGET_USD = 200.0          # Phase 2 Target: 4% (+$200.00)
-MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - MONITORING ONLY
-MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - MONITORING ONLY
-MAX_RISK_AT_ANY_TIME_USD = 150.0    # Max Risk at any time: -$150.00 limit - MONITORING ONLY
+MAX_DAILY_LOSS_USD = 200.0          # Daily Loss Limit: 4% (-$200.00) - ALERT ONLY
+MAX_TOTAL_LOSS_USD = 400.0          # Maximum Loss Limit: 8% (-$400.00) - ALERT ONLY
+MAX_RISK_USD = 150.0                # Max risk at any time (-$150.00) - ALERT ONLY
 
 # --- Push Notification Settings ---
 ENABLE_WINDOWS_TOAST = True            # Send native Windows desktop push notifications
@@ -30,63 +30,43 @@ NTFY_TOPIC = "tradingbot_5k_ivaylo"    # Topic for ntfy mobile app (https://ntfy
 
 # --- Trading Strategy & Symbol Settings ---
 SYMBOL = "XAUUSD"                   # Gold Bot
-TIMEFRAME = mt5.TIMEFRAME_M5        # M5 Timeframe
-SLEEP_INTERVAL = 1                  # 1 second loop interval
-COOLDOWN_SECONDS = 60               # Cooldown between completed trades
+TIMEFRAME = mt5.TIMEFRAME_M5        # Bollinger Bands are calculated on M5
+SLEEP_INTERVAL = 1                  # Check price every 1 second
+COOLDOWN_SECONDS = 60               # Wait after a trade closes before the next entry
 MAGIC_NUMBER = 60020                # Unique identifier for this bot's orders
 DEVIATION = 20                      # Maximum price slippage in points
 
-# --- Strategy Parameters: Bollinger Bands ---
+# --- Bollinger Bands (classic) ---
 BB_PERIOD = 20                      # Period 20
 BB_DEVIATION = 2.0                  # Deviation 2.0
 # Applied Price: Close
-AUTHORIZED_ORDER_TYPE = "ALL"       # Authorized order type: ALL (BUY and SELL)
 
-# --- Entry Logic (breakout -> reversal candle back inside) ---
-# Step 1: a COMPLETED M5 candle CLOSES OUTSIDE a band.
-#         close above UPPER -> SELL setup armed
-#         close below LOWER -> BUY setup armed
-# Step 2: the NEXT completed candle (the reversal candle) must:
-#         SELL: OPEN above the UPPER band AND CLOSE back below the UPPER band
-#         BUY:  OPEN below the LOWER band AND CLOSE back above the LOWER band
-#         -> valid signal, trade opens at the start of the following candle.
-# Other outcomes:
-#         SELL: reversal candle still closes above UPPER -> stays armed (waits for another candle)
-#         SELL: reversal candle OPENS inside the band      -> setup cancelled (re-checked as a new breakout)
-#         BUY: mirrored.
+# --- Classic Bollinger Strategy ---
+#   Price TOUCHES the UPPER band -> SELL, target = LOWER band
+#   Price TOUCHES the LOWER band -> BUY,  target = UPPER band
+# Checked every second on the live price. One trade at a time.
 
 # --- Trade Size & Stop Loss ---
-TRADE_VOLUME = 0.10                 # Lot size of the trade
-STOP_LOSS_USD = 60.0                # Broker stop loss in account dollars from the entry price
-MAX_LOSS_USD = 60.0                 # Software backup stop (broker SL normally closes first)
+TRADE_VOLUME = 0.10                 # Lot size
+STOP_LOSS_USD = 140.0               # Broker stop loss in account dollars from the entry price
+MAX_LOSS_USD = 140.0                # Software backup stop (broker SL normally closes first)
 
-# --- Take Profit ---
-#   BUY  closes when price reaches the UPPER band
-#   SELL closes when price reaches the LOWER band
-# The middle band does not affect the exit.
-
-# --- Stop Behaviour ---
-# When the broker stop loss is hit (or the backup stop closes the trade), the bot STOPS.
-# It does not reopen trades until it is started again manually.
-
-# --- Risk Limits (MONITORING ONLY, the bot never stops because of these) ---
-# Max loss per trade: -$60 (the stop loss above)
+# --- The bot NEVER stops by itself ---
+# Stop losses, loss limits and errors do not stop it. Stop it manually (Ctrl+C).
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
-last_eval_candle_time = None        # Last completed candle the signal logic evaluated
-armed_side = None                   # 'SELL', 'BUY' or None (breakout waiting for reversal)
-last_status_log_time = 0            # Timestamp of periodic open trade status log
+last_signal_key = None              # (side, candle_time) of the last entry, prevents repeats
+last_status_log_time = 0            # Timestamp of periodic status log
 last_wait_log_time = 0              # Timestamp of last "waiting" log
 known_tickets = set()               # Tickets seen on the previous loop (detects broker SL closes)
-trade_info = {}                     # {ticket: (direction, last P&L)} for detecting closes by broker
-stop_bot_reason = None              # Set when a stop loss is hit; the main loop exits when this is set
-phase1_announced = False            # Prevents Phase 1 banner from logging every second
+trade_info = {}                     # {ticket: (direction, last P&L)}
+phase1_announced = False            # Prevents Phase 1 banner from repeating
 
-# --- Limit Monitoring & Safety State Flags ---
-limit_notified_daily = False        # Has daily loss limit been notified?
-limit_notified_total = False        # Has total loss limit been notified?
-limit_notified_max_risk = False     # Has max risk limit been notified?
+# --- Limit Monitoring State Flags ---
+limit_notified_daily = False
+limit_notified_total = False
+limit_notified_max_risk = False
 
 
 def send_push_notification(title, message):
@@ -152,8 +132,24 @@ def send_push_notification(title, message):
 
     threading.Thread(target=_deliver, daemon=True).start()
 
-# Backward-compatible alias
-send_mt5_notification = send_push_notification
+
+def ensure_mt5_connection():
+    """Reconnects to MT5 if the connection was lost. Returns True when connected."""
+    try:
+        if mt5.terminal_info() is not None:
+            return True
+    except Exception:
+        pass
+    logger.warning("🔌 MT5 connection lost. Reconnecting...")
+    try:
+        mt5.shutdown()
+    except Exception:
+        pass
+    if mt5.initialize():
+        logger.info("✅ MT5 reconnected.")
+        return True
+    logger.error(f"MT5 reconnect failed: {mt5.last_error()}. Retrying in 10s.")
+    return False
 
 
 def get_filling_type(symbol):
@@ -197,8 +193,8 @@ def get_position_pnl(pos):
 
 def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     """
-    Fetches OHLC data and calculates Bollinger Bands:
-    period=20, deviation=2.0, shift=0, applied price=Close.
+    Fetches OHLC data and calculates Bollinger Bands on Close.
+    The LAST row is the forming candle, so its bands update live.
     """
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
     if rates is None or len(rates) < period + 5:
@@ -214,94 +210,64 @@ def get_bollinger_bands(symbol, timeframe, period=20, deviation=2.0, count=60):
     return df
 
 
-def check_bb_entry_signal(symbol):
-    """
-    Breakout + reversal candle logic. Evaluated once per COMPLETED M5 candle (iloc[-2]).
-    - Breakout: candle closes above UPPER -> arm SELL; closes below LOWER -> arm BUY.
-    - Reversal (SELL): next completed candle OPENS above UPPER and CLOSES below UPPER -> SELL signal.
-      Still closes above UPPER -> stays armed. Opens inside the band -> cancelled.
-    - Reversal (BUY): mirrored with LOWER.
-    Returns: (signal, candle_time) where signal is 'BUY', 'SELL' or None.
-    """
-    global armed_side, last_eval_candle_time, last_wait_log_time
-
+def get_current_bands(symbol):
+    """Returns the live bands {'upper', 'middle', 'lower', 'time'} of the forming candle, or None."""
     df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
-    if df.empty or len(df) < BB_PERIOD + 2:
+    if df.empty:
+        return None
+    cur = df.iloc[-1]
+    if pd.isna(cur['upper']) or pd.isna(cur['lower']) or pd.isna(cur['middle']):
+        return None
+    return {
+        'upper': float(cur['upper']),
+        'middle': float(cur['middle']),
+        'lower': float(cur['lower']),
+        'time': cur['time'],
+    }
+
+
+def check_classic_signal(symbol):
+    """
+    Classic Bollinger Bands, checked every second:
+      price touches UPPER band -> SELL
+      price touches LOWER band -> BUY
+    Returns (side, candle_time) or (None, None).
+    """
+    global last_wait_log_time
+
+    tick = mt5.symbol_info_tick(symbol)
+    bands = get_current_bands(symbol)
+    if tick is None or bands is None:
         return None, None
 
-    c = df.iloc[-2]     # last COMPLETED candle
-    candle_time = c['time']
+    up, mid, lo = bands['upper'], bands['middle'], bands['lower']
+    candle_time = bands['time']
 
-    if pd.isna(c['upper']) or pd.isna(c['lower']):
-        return None, candle_time
+    side = None
+    if tick.bid >= up:
+        side = 'SELL'
+        logger.info(f"🔴 SELL signal [{candle_time}] | Bid {tick.bid:.2f} touched UPPER {up:.2f}")
+    elif tick.ask <= lo:
+        side = 'BUY'
+        logger.info(f"🟢 BUY signal [{candle_time}] | Ask {tick.ask:.2f} touched LOWER {lo:.2f}")
 
-    # Each completed candle is evaluated exactly once
-    if candle_time == last_eval_candle_time:
-        return None, candle_time
-    last_eval_candle_time = candle_time
+    if side is not None:
+        if (side, candle_time) != last_signal_key:
+            return side, candle_time
+        return None, None
 
-    o, cl = c['open'], c['close']
-    up, lo, mid = c['upper'], c['lower'], c['middle']
-    signal = None
-
-    # 1. Check the reversal candle against an armed setup
-    if armed_side == 'SELL':
-        if o > up and cl < up:
-            signal = 'SELL'
-            logger.info(
-                f"🔴 SELL Signal: reversal candle [{candle_time}] opened above upper {up:.2f} "
-                f"and closed back below it (Open {o:.2f}, Close {cl:.2f})"
-            )
-            armed_side = None
-        elif o > up and cl >= up:
-            logger.info(f"⏳ Reversal candle [{candle_time}] still above upper {up:.2f}. SELL setup stays armed.")
-        else:
-            logger.info(f"↩️ Candle [{candle_time}] opened inside upper band {up:.2f}. SELL setup cancelled.")
-            armed_side = None
-
-    elif armed_side == 'BUY':
-        if o < lo and cl > lo:
-            signal = 'BUY'
-            logger.info(
-                f"🟢 BUY Signal: reversal candle [{candle_time}] opened below lower {lo:.2f} "
-                f"and closed back above it (Open {o:.2f}, Close {cl:.2f})"
-            )
-            armed_side = None
-        elif o < lo and cl <= lo:
-            logger.info(f"⏳ Reversal candle [{candle_time}] still below lower {lo:.2f}. BUY setup stays armed.")
-        else:
-            logger.info(f"↩️ Candle [{candle_time}] opened inside lower band {lo:.2f}. BUY setup cancelled.")
-            armed_side = None
-
-    # 2. Breakout check (only when no setup is armed and no signal was just produced)
-    if signal is None and armed_side is None:
-        if cl > up and AUTHORIZED_ORDER_TYPE in ["ALL", "SELL"]:
-            armed_side = 'SELL'
-            logger.info(
-                f"👀 Breakout UP: candle [{candle_time}] closed above upper {up:.2f} "
-                f"(Close {cl:.2f}). Waiting for a reversal candle."
-            )
-        elif cl < lo and AUTHORIZED_ORDER_TYPE in ["ALL", "BUY"]:
-            armed_side = 'BUY'
-            logger.info(
-                f"👀 Breakout DOWN: candle [{candle_time}] closed below lower {lo:.2f} "
-                f"(Close {cl:.2f}). Waiting for a reversal candle."
-            )
-
-    if signal is None and armed_side is None:
-        now = time.time()
-        if now - last_wait_log_time >= 15:
-            last_wait_log_time = now
-            logger.info(
-                f"⏳ Waiting for breakout | Last candle [{candle_time}] Close {cl:.2f} | "
-                f"Upper {up:.2f}, Mid {mid:.2f}, Lower {lo:.2f}"
-            )
-
-    return signal, candle_time
+    now = time.time()
+    if now - last_wait_log_time >= 15:
+        last_wait_log_time = now
+        logger.info(
+            f"⏳ Waiting for a band touch | Bid {tick.bid:.2f} | "
+            f"Upper {up:.2f}, Mid {mid:.2f}, Lower {lo:.2f}"
+        )
+    return None, None
 
 
-def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Single", notify_on_error=True):
-    """Places a market order with an optional stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
+def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Classic", notify_on_error=True):
+    """Places a market order with a stop loss PRICE and filling mode fallback. Returns (result, fill_price)."""
     action_name = "BUY" if order_type == mt5.ORDER_TYPE_BUY else "SELL"
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -341,7 +307,7 @@ def place_order_safe(symbol, order_type, volume, sl_price=0.0, comment="BB_Singl
         "type": order_type,
         "price": price,
         "sl": float(sl),
-        "tp": 0.0,                      # Take profit is managed by the bot
+        "tp": 0.0,                      # Take profit is managed by the bot (opposite band)
         "magic": MAGIC_NUMBER,
         "comment": comment,
         "deviation": DEVIATION,
@@ -421,7 +387,7 @@ def close_position(symbol, position):
         request["type_filling"] = mode
         res = mt5.order_send(request)
         if res and res.retcode in [mt5.TRADE_RETCODE_DONE, 10008, 0]:
-            logger.info(f"Closed #{position.ticket} at {price} (Profit: ${get_position_pnl(position):.2f})")
+            logger.info(f"Closed #{position.ticket} at {price} (P&L: ${get_position_pnl(position):.2f})")
             return True
         elif res and res.retcode in [10030, getattr(mt5, 'TRADE_RETCODE_UNSUPPORTED_FILLING_MODE', 10030)]:
             continue
@@ -464,7 +430,6 @@ def get_daily_realized_pnl(magic=MAGIC_NUMBER):
     for d in deals:
         if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT:
             daily_pnl += (d.profit + d.swap + getattr(d, 'commission', 0.0))
-
     return daily_pnl
 
 
@@ -480,7 +445,6 @@ def get_total_closed_pnl(magic=MAGIC_NUMBER):
     for d in deals:
         if d.magic == magic and d.entry == mt5.DEAL_ENTRY_OUT:
             total_pnl += (d.profit + d.swap + getattr(d, 'commission', 0.0))
-
     return total_pnl
 
 
@@ -490,8 +454,7 @@ def calculate_stop_loss(symbol, direction, volume, stop_usd):
       BUY:  SL = entry - distance
       SELL: SL = entry + distance
     distance = stop_usd / (volume * contract size)
-    e.g. 0.10 lots, 100 oz: $60 / (0.10 * 100) = $6.00 gold price distance.
-    Returns (sl_price, expected_loss_usd) or (None, reason) if no valid SL is possible.
+    e.g. 0.10 lots, 100 oz: $140 / (0.10 * 100) = $14.00 gold price distance.
     """
     symbol_info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol)
@@ -533,17 +496,18 @@ def open_trade(symbol, direction, volume, stop_usd, comment):
     )
 
     if res:
-        logger.info(f"🚀 {direction} {volume} lots @ {fill_price:.2f} | SL {sl_price:.2f} (-${info:.2f})")
+        target = "LOWER band" if direction == "SELL" else "UPPER band"
+        logger.info(f"🚀 {direction} {volume} lots @ {fill_price:.2f} | SL {sl_price:.2f} (-${info:.2f}) | Target: {target}")
         send_push_notification(
             f"🟢 {direction} Placed",
-            f"{symbol} {direction} {volume} lots @ {fill_price:.2f} | SL {sl_price:.2f} (-${info:.0f})"
+            f"{symbol} {direction} {volume} lots @ {fill_price:.2f} | SL {sl_price:.2f} (-${info:.0f}) | Target: {target}"
         )
         return res, fill_price
     return None, 0.0
 
 
 def check_challenge_limits(symbol):
-    """MONITORING ONLY - Checks challenge limits and sends notifications. Does NOT stop the bot."""
+    """ALERTS ONLY - sends notifications. Never stops the bot."""
     global limit_notified_daily, limit_notified_total, limit_notified_max_risk
 
     positions = get_active_positions(symbol)
@@ -557,8 +521,7 @@ def check_challenge_limits(symbol):
         limit_notified_daily = True
         send_push_notification(
             "⚠️ DAILY LOSS LIMIT ALERT",
-            f"Today's P&L: ${total_today_pnl:.2f} has reached the daily limit of -${MAX_DAILY_LOSS_USD:.2f}. "
-            f"Consider closing positions manually to preserve account."
+            f"Today's P&L: ${total_today_pnl:.2f} reached -${MAX_DAILY_LOSS_USD:.2f}. Bot keeps running."
         )
     elif total_today_pnl > -MAX_DAILY_LOSS_USD + 25.0 and limit_notified_daily:
         limit_notified_daily = False
@@ -568,21 +531,20 @@ def check_challenge_limits(symbol):
         limit_notified_total = True
         send_push_notification(
             "🔴 MAXIMUM LOSS LIMIT ALERT",
-            f"Cumulative P&L: ${cumulative_closed_pnl:.2f} has reached the maximum loss limit of -${MAX_TOTAL_LOSS_USD:.2f}. "
-            f"This is a critical alert. Consider stopping trading for this challenge."
+            f"Cumulative P&L: ${cumulative_closed_pnl:.2f} reached -${MAX_TOTAL_LOSS_USD:.2f}. Bot keeps running."
         )
     elif cumulative_closed_pnl > -MAX_TOTAL_LOSS_USD + 50.0 and limit_notified_total:
         limit_notified_total = False
 
-    # 3. Max Risk / Floating Drawdown Limit (-$150)
+    # 3. Max risk at any time (-$150)
     current_loss = min(floating_pnl, total_today_pnl)
-    if current_loss <= -MAX_RISK_AT_ANY_TIME_USD and not limit_notified_max_risk:
+    if current_loss <= -MAX_RISK_USD and not limit_notified_max_risk:
         limit_notified_max_risk = True
         send_push_notification(
-            f"⚠️ MAX RISK ALERT (${MAX_RISK_AT_ANY_TIME_USD:.0f})",
-            f"Loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_AT_ANY_TIME_USD:.2f})."
+            f"⚠️ MAX RISK ALERT (${MAX_RISK_USD:.0f})",
+            f"Loss is ${abs(current_loss):.2f} (Limit: -${MAX_RISK_USD:.2f}). Bot keeps running."
         )
-    elif current_loss > -MAX_RISK_AT_ANY_TIME_USD + 25.0 and limit_notified_max_risk:
+    elif current_loss > -MAX_RISK_USD + 25.0 and limit_notified_max_risk:
         limit_notified_max_risk = False
 
 
@@ -612,24 +574,26 @@ def close_trade(symbol, pos, title, reason, pnl):
     last_close_time = time.time()
 
 
-def manage_single(symbol, pos, bands, tick):
+def manage_position(symbol, pos, bands, tick):
     """
-    Manages one open trade. Returns True if still open, False if the bot closed it.
-    - Backup stop at -$60 (broker SL normally closes first). This STOPS the bot.
+    Manages one open trade. Returns True while it is still open.
+    - Backup stop at -$140 (broker SL normally closes first). Bot keeps running.
     - Take profit at the OPPOSITE band (BUY -> upper, SELL -> lower).
     """
-    global last_status_log_time, stop_bot_reason
+    global last_status_log_time
 
     pnl = get_position_pnl(pos)
     is_buy = pos.type == mt5.POSITION_TYPE_BUY
     trade_dir = "BUY" if is_buy else "SELL"
+    trade_info[pos.ticket] = (trade_dir, pnl)
 
+    # 1. Backup stop loss
     if MAX_LOSS_USD > 0 and pnl <= -MAX_LOSS_USD:
-        logger.warning(f"🛑 Backup Stop: #{pos.ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing and stopping bot...")
+        logger.warning(f"🛑 Backup Stop: #{pos.ticket} P&L ${pnl:.2f} <= -${MAX_LOSS_USD:.2f}. Closing...")
         close_trade(symbol, pos, "🛑 Stop Loss Triggered", f"Backup stop -${MAX_LOSS_USD:.0f}", pnl)
-        stop_bot_reason = f"Backup stop -${MAX_LOSS_USD:.0f} hit on #{pos.ticket} ({trade_dir}) at ${pnl:.2f}"
         return False
 
+    # 2. Take profit at the opposite band
     target_band = None
     price = 0.0
     if bands is not None and tick is not None:
@@ -640,6 +604,7 @@ def manage_single(symbol, pos, bands, tick):
             close_trade(symbol, pos, "🏁 Target Band Reached!", f"Opposite band {target_band:.2f} reached", pnl)
             return False
 
+    # 3. Status log every 10 seconds
     now = time.time()
     if now - last_status_log_time >= 10:
         last_status_log_time = now
@@ -653,15 +618,15 @@ def manage_single(symbol, pos, bands, tick):
 
 def manage_active_trade(symbol):
     """
-    Manages the open trade. Returns True while a bot position is open, False when none is open.
-    - Broker stop loss hit -> record the stop reason (the main loop then stops the bot).
+    Manages the open trade. Returns True while a bot position is open.
+    Broker stop losses are detected and reported. The bot keeps running.
     """
-    global known_tickets, last_close_time, stop_bot_reason
+    global known_tickets, last_close_time
 
     positions = get_active_positions(symbol)
     current = set(p.ticket for p in positions)
 
-    # Trades that disappeared without the bot closing them -> broker stop loss hit
+    # Trades that disappeared without the bot closing them -> closed by broker (stop loss)
     for ticket in known_tickets - current:
         if ticket in trade_info:
             direction, last_pnl = trade_info[ticket]
@@ -669,126 +634,102 @@ def manage_active_trade(symbol):
             if closed_pnl is None:
                 closed_pnl = last_pnl
             logger.warning(f"🛡️ #{ticket} {direction} closed by broker at ${closed_pnl:.2f}.")
-            send_push_notification("🛡️ Closed by Broker", f"{symbol} {direction} #{ticket} closed at ${closed_pnl:.2f} (stop loss).")
+            send_push_notification(
+                "🛡️ Closed by Broker",
+                f"{symbol} {direction} #{ticket} closed at ${closed_pnl:.2f} (stop loss). Bot keeps running."
+            )
             last_close_time = time.time()
-            stop_bot_reason = f"Broker stop loss hit on #{ticket} ({direction}) at ${closed_pnl:.2f}"
         forget_ticket(ticket)
     known_tickets = current
 
     if not positions:
         return False
 
-    # Keep trade_info current for broker-close detection
-    for p in positions:
-        trade_info[p.ticket] = ('BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL', get_position_pnl(p))
-
     tick = mt5.symbol_info_tick(symbol)
-    df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
-    bands = None
-    if not df.empty and not pd.isna(df.iloc[-1]['middle']):
-        last = df.iloc[-1]
-        bands = {'upper': float(last['upper']), 'middle': float(last['middle']), 'lower': float(last['lower'])}
+    bands = get_current_bands(symbol)
 
     still_open = False
     for pos in positions:
-        if manage_single(symbol, pos, bands, tick):
+        if manage_position(symbol, pos, bands, tick):
             still_open = True
     return still_open
 
 
+def bot_iteration():
+    """One pass of the main loop. Any error here is caught by run_bot and the bot continues."""
+    global last_signal_key, phase1_announced
+
+    # 1. Phase 1 Target Tracker (announced once)
+    cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
+    if cumulative_closed_pnl >= PHASE_1_TARGET_USD and not phase1_announced:
+        phase1_announced = True
+        logger.info(f"🎉 PHASE 1 TARGET ACHIEVED! Total: +${cumulative_closed_pnl:.2f}")
+        send_push_notification(
+            "🎉 Phase 1 Target Achieved!",
+            f"Cumulative profit +${cumulative_closed_pnl:.2f} >= +${PHASE_1_TARGET_USD:.2f}. Bot keeps running."
+        )
+
+    # 2. Challenge limits (alerts only)
+    check_challenge_limits(SYMBOL)
+
+    # 3. Manage the open trade (stop loss, target band)
+    if manage_active_trade(SYMBOL):
+        return
+
+    # 4. Cooldown after a trade closes
+    if time.time() - last_close_time < COOLDOWN_SECONDS:
+        return
+
+    # 5. Classic Bollinger signal (checked every second)
+    side, candle_time = check_classic_signal(SYMBOL)
+    if side:
+        last_signal_key = (side, candle_time)   # one entry per candle per direction
+        open_trade(SYMBOL, side, TRADE_VOLUME, STOP_LOSS_USD, f"BB_Classic_{side}")
+
+
 def run_bot():
-    """Main execution loop for the $5K Challenge XAUUSD M5 breakout bot (single trade, SL -$60)."""
-    global last_close_time, phase1_announced, stop_bot_reason
-
-    if not mt5.initialize():
-        logger.error(f"MT5 initialization failed: {mt5.last_error()}")
-        return
-
-    symbol_info = mt5.symbol_info(SYMBOL)
-    if not symbol_info:
-        logger.error(f"Symbol {SYMBOL} not found.")
-        mt5.shutdown()
-        return
+    """Main loop: checks price every second and runs 24/7 until stopped manually (Ctrl+C)."""
+    while not mt5.initialize():
+        logger.error(f"MT5 initialization failed: {mt5.last_error()}. Retrying in 10s...")
+        time.sleep(10)
 
     logger.info("=" * 65)
-    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Breakout Bot (single trade)")
-    logger.info(f"Timeframe: M5 | Indicator: Bollinger Bands (20, 2, Close)")
-    logger.info(f"Entry: candle closes outside a band -> reversal candle opens outside and closes back inside")
-    logger.info(f"Lot: {TRADE_VOLUME} | Stop Loss: -${STOP_LOSS_USD:.0f} from entry (dynamic)")
-    logger.info(f"Take Profit: opposite band (BUY -> upper, SELL -> lower)")
-    logger.info(f"Backup Stop: -${MAX_LOSS_USD:.0f}")
-    logger.info(f"Stop behaviour: bot STOPS when the stop loss is hit")
-    logger.info(f"⚠️ MONITORING (alerts only):")
-    logger.info(f"  - Daily Loss Limit: -${MAX_DAILY_LOSS_USD:.2f} (4% of $5,000)")
-    logger.info(f"  - Maximum Loss Limit: -${MAX_TOTAL_LOSS_USD:.2f} (8% of $5,000)")
-    logger.info(f"  - Max Risk: -${MAX_RISK_AT_ANY_TIME_USD:.2f}")
-    logger.info(f"Phase 1 Profit Target: +${PHASE_1_TARGET_USD:.2f} (8% of $5,000)")
-    logger.info(f"Phase 2 Profit Target: +${PHASE_2_TARGET_USD:.2f} (4% of $5,000)")
+    logger.info(f"🚀 Started $5K Challenge {SYMBOL} Classic Bollinger Bot (24/7, manual stop only)")
+    logger.info(f"Price check: every {SLEEP_INTERVAL}s | Bands: M5 BB({BB_PERIOD}, {BB_DEVIATION}, Close)")
+    logger.info(f"Entry: touch UPPER -> SELL | touch LOWER -> BUY")
+    logger.info(f"Exit: opposite band | Stop Loss: -${STOP_LOSS_USD:.0f} from entry | Lot: {TRADE_VOLUME}")
+    logger.info(f"Alerts only: daily -${MAX_DAILY_LOSS_USD:.0f}, total -${MAX_TOTAL_LOSS_USD:.0f}, max risk -${MAX_RISK_USD:.0f}")
     logger.info("=" * 65)
 
     send_push_notification(
         "🚀 5K Bot Online",
-        f"Breakout bot active on {SYMBOL} (M5). {TRADE_VOLUME} lots, SL -${STOP_LOSS_USD:.0f}. "
-        f"Bot stops if the stop loss is hit."
+        f"Classic Bollinger bot on {SYMBOL}. {TRADE_VOLUME} lots, SL -${STOP_LOSS_USD:.0f}, "
+        f"TP opposite band. Runs 24/7 until you stop it."
     )
 
+    error_notified = False
     try:
         while True:
-            # 1. Phase 1 Target Tracker (announced once)
-            cumulative_closed_pnl = get_total_closed_pnl(MAGIC_NUMBER)
-            if cumulative_closed_pnl >= PHASE_1_TARGET_USD and not phase1_announced:
-                phase1_announced = True
-                logger.info("=" * 65)
-                logger.info(f"🎉🎉 PHASE 1 TARGET ACHIEVED! 🎉🎉")
-                logger.info(f"Total Cumulative Profit: +${cumulative_closed_pnl:.2f} >= +${PHASE_1_TARGET_USD:.2f} (+8%)")
-                logger.info("You may continue to Phase 2 or submit for rewards!")
-                logger.info("=" * 65)
-                send_push_notification(
-                    "🎉 Phase 1 Target Achieved!",
-                    f"Cumulative profit +${cumulative_closed_pnl:.2f} >= +${PHASE_1_TARGET_USD:.2f}. Bot keeps running."
-                )
-
-            # 2. Challenge Limits (MONITORING ONLY)
-            check_challenge_limits(SYMBOL)
-
-            # 3. Update the breakout / reversal state on every completed candle (always, even while in a trade)
-            signal, candle_time = check_bb_entry_signal(SYMBOL)
-
-            # 4. Manage the open trade
-            still_open = manage_active_trade(SYMBOL)
-
-            # 5. Stop the bot if a stop loss was hit
-            if stop_bot_reason:
-                logger.error(f"🛑 BOT STOPPED: {stop_bot_reason}")
-                send_push_notification(
-                    "🛑 BOT STOPPED",
-                    f"{SYMBOL}: {stop_bot_reason}. Bot is stopped. Restart it manually."
-                )
-                break
-
-            if still_open:
-                time.sleep(SLEEP_INTERVAL)
-                continue
-
-            # 6. Cooldown after a trade closes
-            if time.time() - last_close_time < COOLDOWN_SECONDS:
-                time.sleep(SLEEP_INTERVAL)
-                continue
-
-            # 7. Valid reversal signal -> open the trade
-            if signal:
-                logger.info(f"📊 Signal [{candle_time}]: {signal}! Placing trade ({TRADE_VOLUME} lots)...")
-                open_trade(SYMBOL, signal, TRADE_VOLUME, STOP_LOSS_USD, f"BB_Breakout_{signal}")
-
+            try:
+                if not ensure_mt5_connection():
+                    time.sleep(10)
+                    continue
+                bot_iteration()
+                error_notified = False
+            except Exception as e:
+                # Errors never stop the bot: log, notify once, and continue
+                logger.error(f"Error in loop (bot continues): {e}", exc_info=True)
+                if not error_notified:
+                    error_notified = True
+                    send_push_notification("⚠️ Bot Error", f"{SYMBOL}: {e}. Bot keeps running.")
+                time.sleep(5)
             time.sleep(SLEEP_INTERVAL)
 
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user (KeyboardInterrupt).")
-    except Exception as e:
-        logger.error(f"Unexpected error in main loop: {e}", exc_info=True)
+        logger.info("Bot stopped by user (Ctrl+C).")
     finally:
         mt5.shutdown()
-        logger.info("MT5 connection closed gracefully.")
+        logger.info("MT5 connection closed.")
 
 
 if __name__ == "__main__":
