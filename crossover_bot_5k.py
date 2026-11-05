@@ -50,11 +50,12 @@ BB_DEVIATION = 2.0                  # Deviation 2.0
 #      price TOUCHES the LOWER band -> BUY,  target = UPPER band
 #      Stop loss -$140 from entry.
 #
-# 2. BREAKOUT -> FLIP:
+# 2. BREAKOUT -> FLIP (only when the original trade is LOSING):
 #      While a REVERSION trade is open, every COMPLETED M5 candle is checked:
-#        SELL is open and a candle CLOSES ABOVE the UPPER band -> close the SELL, open BUY  (impulse up)
-#        BUY  is open and a candle CLOSES BELOW the LOWER band -> close the BUY,  open SELL (impulse down)
+#        SELL is losing and a GREEN candle CLOSES ABOVE the UPPER band -> close the SELL, open BUY  (impulse up)
+#        BUY  is losing and a RED candle CLOSES BELOW the LOWER band   -> close the BUY,  open SELL (impulse down)
 #      This means price is "walking the band" against our trade, so we turn with it.
+#      If the original trade is not losing, there is no flip and it keeps its normal target and stop.
 #
 # 3. IMPULSE trade (with the trend, band walk):
 #      Take profit +$100 and stop loss -$140, both from entry, set at the broker.
@@ -607,9 +608,11 @@ def check_reversion_signal(tick, live):
 
 def check_breakout_flip(symbol, pos, last_closed):
     """
-    REVERSION trade only. Checks each completed candle once:
-      SELL open and candle CLOSED above UPPER -> close SELL, open BUY impulse
-      BUY  open and candle CLOSED below LOWER -> close BUY,  open SELL impulse
+    REVERSION trade only. Checks each completed candle once. Flip only when BOTH are true:
+      - the reversion trade is LOSING (P&L < 0)
+      - the completed candle is walking the band against it:
+          SELL open + GREEN candle closed above UPPER -> close SELL, open BUY impulse
+          BUY  open + RED candle closed below LOWER   -> close BUY,  open SELL impulse
     Only candles that closed AFTER the trade was opened count.
     Returns True if the trade was flipped.
     """
@@ -624,14 +627,29 @@ def check_breakout_flip(symbol, pos, last_closed):
         return False   # candle closed before the trade was opened
 
     is_buy = pos.type == mt5.POSITION_TYPE_BUY
-    c, up, lo = last_closed['close'], last_closed['upper'], last_closed['lower']
+    o, c = last_closed['open'], last_closed['close']
+    up, lo = last_closed['upper'], last_closed['lower']
+    pnl = get_position_pnl(pos)
 
-    if not is_buy and c > up:
-        new_dir, band, txt = "BUY", 'UPPER', f"candle closed {c:.2f} ABOVE upper {up:.2f}"
-    elif is_buy and c < lo:
-        new_dir, band, txt = "SELL", 'LOWER', f"candle closed {c:.2f} BELOW lower {lo:.2f}"
+    # Band walk = the completed candle CLOSED outside the band AND moved in that direction
+    walk_up = c > up and c > o      # green candle closed above the upper band
+    walk_down = c < lo and c < o    # red candle closed below the lower band
+
+    if not is_buy and walk_up:
+        new_dir, band = "BUY", 'UPPER'
+        txt = f"green candle closed {c:.2f} ABOVE upper {up:.2f}"
+    elif is_buy and walk_down:
+        new_dir, band = "SELL", 'LOWER'
+        txt = f"red candle closed {c:.2f} BELOW lower {lo:.2f}"
     else:
         return False
+
+    # The original reversion trade must already be LOSING
+    if pnl >= 0:
+        logger.info(f"⏳ Band walk [{last_closed['time']}] ({txt}), but #{pos.ticket} is not losing "
+                    f"(P&L ${pnl:.2f}). No flip.")
+        return False
+    txt += f", reversion P&L ${pnl:.2f}"
 
     logger.warning(f"⚡ BREAKOUT [{last_closed['time']}]: {txt}. Flipping to {new_dir} impulse.")
     if not close_trade(symbol, pos, "⚡ Breakout - Reversion Closed", f"Breakout: {txt}"):
