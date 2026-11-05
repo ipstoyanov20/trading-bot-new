@@ -45,24 +45,27 @@ BB_DEVIATION = 2.0                  # Deviation 2.0
 # =====================================================================
 # STRATEGY
 # =====================================================================
-# 1. REVERSION trade (counter-trend, classic Bollinger):
-#      price TOUCHES the UPPER band -> SELL, target = LOWER band
-#      price TOUCHES the LOWER band -> BUY,  target = UPPER band
-#      Stop loss -$140 from entry.
+# 1. ENTRY - wait for confirmation:
+#      Candle A touches a band (its HIGH reaches the UPPER band, or its LOW reaches the LOWER band).
+#      The bot does NOT trade yet. It waits for the NEXT candle B to CLOSE:
 #
-# 2. BREAKOUT -> FLIP (only when the original trade is LOSING):
-#      While a REVERSION trade is open, every COMPLETED M5 candle is checked:
-#        SELL is losing and a GREEN candle CLOSES ABOVE the UPPER band -> close the SELL, open BUY  (impulse up)
-#        BUY  is losing and a RED candle CLOSES BELOW the LOWER band   -> close the BUY,  open SELL (impulse down)
-#      This means price is "walking the band" against our trade, so we turn with it.
-#      If the original trade is not losing, there is no flip and it keeps its normal target and stop.
+#      A touched UPPER + B is RED   -> SELL  (REVERSION, original trade)
+#      A touched UPPER + B is GREEN -> BUY   (TREND, price keeps pushing up)
+#      A touched LOWER + B is GREEN -> BUY   (REVERSION, original trade)
+#      A touched LOWER + B is RED   -> SELL  (TREND, price keeps pushing down)
+#      B is a doji (close == open), or A touched both bands -> no trade.
 #
-# 3. IMPULSE trade (with the trend, band walk):
-#      Take profit +$100 and stop loss -$140, both from entry, set at the broker.
-#      The bands do not close an impulse trade.
+# 2. REVERSION trade: target = opposite band, stop loss -$140.
+#      Impulse flip (trade must be LOSING, checked on each completed candle after entry):
+#        SELL (from UPPER) + GREEN candle closes ABOVE UPPER -> close SELL, open BUY impulse
+#        BUY  (from LOWER) + RED candle closes BELOW LOWER   -> close BUY,  open SELL impulse
 #
-# 4. After an impulse, no new REVERSION trade on the same band until price returns to the middle band.
-#      (Stops the bot from selling the top again while price is still walking the upper band.)
+# 3. TREND trade: take profit +$100, stop loss -$140.
+#      Impulse flip, reverse logic (trade must be LOSING):
+#        BUY  (from UPPER) + RED candle closes back BELOW UPPER   -> close BUY,  open SELL impulse
+#        SELL (from LOWER) + GREEN candle closes back ABOVE LOWER -> close SELL, open BUY impulse
+#
+# 4. IMPULSE trade: take profit +$100, stop loss -$140. No further flip.
 #
 # One position at a time. The bot NEVER stops by itself (Ctrl+C to stop).
 # =====================================================================
@@ -73,30 +76,32 @@ TRADE_VOLUME = 0.10                 # Lot size for both reversion and impulse tr
 # --- Reversion trade ---
 REV_STOP_LOSS_USD = 140.0           # Broker stop loss from entry
 
+# --- Trend trade ---
+TRD_TAKE_PROFIT_USD = 100.0         # Broker take profit from entry
+TRD_STOP_LOSS_USD = 140.0           # Broker stop loss from entry
+
 # --- Impulse trade ---
 IMP_TAKE_PROFIT_USD = 100.0         # Broker take profit from entry
 IMP_STOP_LOSS_USD = 140.0           # Broker stop loss from entry
 
 # --- Backup (software) exits, in case the broker SL/TP is missing ---
 BACKUP_STOP_USD = 140.0
-BACKUP_TP_USD = 100.0               # Impulse trades only
-
-# --- After an impulse, block reversion on that band until price touches the middle band ---
-BLOCK_REVERSION_AFTER_IMPULSE = True
+BACKUP_TP_USD = 100.0               # Trend and impulse trades only
 
 REV_COMMENT = "BB_Rev"
+TRD_COMMENT = "BB_Trd"
 IMP_COMMENT = "BB_Imp"
+MODE_NAMES = {'REV': "Reversion", 'TRD': "Trend", 'IMP': "Impulse"}
 
 # --- Bot Runtime State ---
 last_close_time = 0                 # Timestamp of last closed trade
-last_signal_key = None              # (side, candle_time) of the last reversion entry
-last_breakout_candle = None         # Last completed candle checked for a breakout
+last_entry_candle = None            # Confirmation candle B already evaluated for an entry
+last_breakout_candle = None         # Last completed candle checked for a flip
 last_status_log_time = 0
 last_wait_log_time = 0
 known_tickets = set()               # Tickets seen on the previous loop (detects broker SL/TP closes)
 trade_info = {}                     # {ticket: (direction, mode, last P&L)}
-trade_modes = {}                    # {ticket: 'REV' or 'IMP'}
-blocked_band = None                 # 'UPPER', 'LOWER' or None (reversion blocked on that band)
+trade_modes = {}                    # {ticket: 'REV', 'TRD' or 'IMP'}
 phase1_announced = False
 
 # --- Limit Monitoring State Flags ---
@@ -262,15 +267,22 @@ def bands_of(row):
         't': int(row['t']),
         'open': float(row['open']),
         'close': float(row['close']),
+        'high': float(row['high']),
+        'low': float(row['low']),
     }
 
 
 def get_band_data(symbol):
-    """Returns (live_bands, last_completed_candle) or (None, None)."""
+    """
+    Returns (live, b, a):
+      live = forming candle (bands update every second)
+      b    = last completed candle (confirmation candle)
+      a    = the completed candle before it (touch candle)
+    """
     df = get_bollinger_bands(symbol, TIMEFRAME, period=BB_PERIOD, deviation=BB_DEVIATION, count=60)
-    if df.empty or len(df) < BB_PERIOD + 2:
-        return None, None
-    return bands_of(df.iloc[-1]), bands_of(df.iloc[-2])
+    if df.empty or len(df) < BB_PERIOD + 3:
+        return None, None, None
+    return bands_of(df.iloc[-1]), bands_of(df.iloc[-2]), bands_of(df.iloc[-3])
 
 
 # ---------------------------------------------------------------------
@@ -367,10 +379,13 @@ def place_order_safe(symbol, order_type, volume, sl_price=0.0, tp_price=0.0, com
 
 
 def open_trade(symbol, direction, mode):
-    """Opens a REVERSION ('REV') or IMPULSE ('IMP') trade. Returns True on success."""
+    """Opens a REVERSION ('REV'), TREND ('TRD') or IMPULSE ('IMP') trade. Returns True on success."""
     if mode == 'REV':
         levels = calculate_levels(symbol, direction, TRADE_VOLUME, REV_STOP_LOSS_USD)
         comment = f"{REV_COMMENT}_{direction}"
+    elif mode == 'TRD':
+        levels = calculate_levels(symbol, direction, TRADE_VOLUME, TRD_STOP_LOSS_USD, TRD_TAKE_PROFIT_USD)
+        comment = f"{TRD_COMMENT}_{direction}"
     else:
         levels = calculate_levels(symbol, direction, TRADE_VOLUME, IMP_STOP_LOSS_USD, IMP_TAKE_PROFIT_USD)
         comment = f"{IMP_COMMENT}_{direction}"
@@ -394,9 +409,11 @@ def open_trade(symbol, direction, mode):
         msg = f"{symbol} {direction} {TRADE_VOLUME} @ {fill_price:.2f} | SL {sl:.2f} (-${REV_STOP_LOSS_USD:.0f}) | Target: {target}"
         send_push_notification(f"🔄 Reversion {direction}", msg)
     else:
+        tp_usd = TRD_TAKE_PROFIT_USD if mode == 'TRD' else IMP_TAKE_PROFIT_USD
+        sl_usd = TRD_STOP_LOSS_USD if mode == 'TRD' else IMP_STOP_LOSS_USD
         msg = (f"{symbol} {direction} {TRADE_VOLUME} @ {fill_price:.2f} | "
-               f"TP {tp:.2f} (+${IMP_TAKE_PROFIT_USD:.0f}) | SL {sl:.2f} (-${IMP_STOP_LOSS_USD:.0f})")
-        send_push_notification(f"🚀 Impulse {direction}", msg)
+               f"TP {tp:.2f} (+${tp_usd:.0f}) | SL {sl:.2f} (-${sl_usd:.0f})")
+        send_push_notification(f"🚀 {MODE_NAMES[mode]} {direction}", msg)
     logger.info(f"🚀 {mode} | {msg}")
     return True
 
@@ -412,10 +429,16 @@ def get_active_positions(symbol):
 
 
 def get_trade_mode(pos):
-    """'IMP' for impulse trades, 'REV' for reversion trades."""
+    """'REV' reversion, 'TRD' trend or 'IMP' impulse."""
     if pos.ticket in trade_modes:
         return trade_modes[pos.ticket]
-    mode = 'IMP' if str(getattr(pos, 'comment', '')).startswith(IMP_COMMENT) else 'REV'
+    comment = str(getattr(pos, 'comment', ''))
+    if comment.startswith(IMP_COMMENT):
+        mode = 'IMP'
+    elif comment.startswith(TRD_COMMENT):
+        mode = 'TRD'
+    else:
+        mode = 'REV'
     trade_modes[pos.ticket] = mode
     return mode
 
@@ -555,71 +578,69 @@ def check_challenge_limits(symbol):
 # ---------------------------------------------------------------------
 # Signals
 # ---------------------------------------------------------------------
-def update_band_block(tick, live):
-    """Clears the post-impulse block once price comes back to the middle band."""
-    global blocked_band
-    if blocked_band is None or live is None or tick is None:
-        return
-    if blocked_band == 'UPPER' and tick.bid <= live['middle']:
-        logger.info(f"✅ Price {tick.bid:.2f} back at middle {live['middle']:.2f}. Reversion at UPPER band allowed again.")
-        blocked_band = None
-    elif blocked_band == 'LOWER' and tick.ask >= live['middle']:
-        logger.info(f"✅ Price {tick.ask:.2f} back at middle {live['middle']:.2f}. Reversion at LOWER band allowed again.")
-        blocked_band = None
-
-
-def check_reversion_signal(tick, live):
+def check_entry_signal(a, b):
     """
-    Classic Bollinger touch, checked every second:
-      bid touches UPPER -> SELL
-      ask touches LOWER -> BUY
-    Returns (side, candle_time) or (None, None).
+    Evaluated once per completed candle B (the candle after the touch candle A).
+      A touched UPPER + B RED   -> ('SELL', 'REV')
+      A touched UPPER + B GREEN -> ('BUY',  'TRD')
+      A touched LOWER + B GREEN -> ('BUY',  'REV')
+      A touched LOWER + B RED   -> ('SELL', 'TRD')
+    Returns (side, mode) or (None, None).
     """
-    global last_wait_log_time
-    if tick is None or live is None:
+    global last_entry_candle, last_wait_log_time
+    if a is None or b is None:
+        return None, None
+    if b['t'] == last_entry_candle:
+        return None, None
+    last_entry_candle = b['t']
+
+    touched_upper = a['high'] >= a['upper']
+    touched_lower = a['low'] <= a['lower']
+    green = b['close'] > b['open']
+    red = b['close'] < b['open']
+    color = "GREEN" if green else ("RED" if red else "DOJI")
+
+    if touched_upper and touched_lower:
+        logger.info(f"⏭️ Candle [{a['time']}] touched BOTH bands. No trade.")
         return None, None
 
-    up, mid, lo = live['upper'], live['middle'], live['lower']
-    side, band = None, None
-    if tick.bid >= up:
-        side, band = 'SELL', 'UPPER'
-    elif tick.ask <= lo:
-        side, band = 'BUY', 'LOWER'
+    if touched_upper or touched_lower:
+        band = "UPPER" if touched_upper else "LOWER"
+        line = f"A [{a['time']}] touched {band} | B [{b['time']}] closed {color} (O {b['open']:.2f}, C {b['close']:.2f})"
+        if touched_upper and red:
+            logger.info(f"🔴 {line} -> SELL reversion (original)")
+            return 'SELL', 'REV'
+        if touched_upper and green:
+            logger.info(f"🟢 {line} -> BUY trend (price keeps going up)")
+            return 'BUY', 'TRD'
+        if touched_lower and green:
+            logger.info(f"🟢 {line} -> BUY reversion (original)")
+            return 'BUY', 'REV'
+        if touched_lower and red:
+            logger.info(f"🔴 {line} -> SELL trend (price keeps going down)")
+            return 'SELL', 'TRD'
+        logger.info(f"⏭️ {line} -> doji, no trade")
+        return None, None
 
-    if side is not None:
-        if BLOCK_REVERSION_AFTER_IMPULSE and blocked_band == band:
-            now = time.time()
-            if now - last_wait_log_time >= 15:
-                last_wait_log_time = now
-                logger.info(f"⏸️ {band} band touched, but reversion is blocked after the impulse "
-                            f"(waiting for middle {mid:.2f}).")
-            return None, None
-        if (side, live['time']) == last_signal_key:
-            return None, None
-        logger.info(f"📊 Reversion {side} [{live['time']}] | Bid {tick.bid:.2f} / Ask {tick.ask:.2f} touched {band} band")
-        return side, live['time']
-
-    now = time.time()
-    if now - last_wait_log_time >= 15:
-        last_wait_log_time = now
-        logger.info(f"⏳ Waiting for a band touch | Bid {tick.bid:.2f} | Upper {up:.2f}, Mid {mid:.2f}, Lower {lo:.2f}")
+    logger.info(f"⏳ No band touch on [{a['time']}] | Upper {a['upper']:.2f}, Mid {a['middle']:.2f}, Lower {a['lower']:.2f}")
     return None, None
 
 
-def check_breakout_flip(symbol, pos, last_closed):
+def check_breakout_flip(symbol, pos, mode, last_closed):
     """
-    REVERSION trade only. Checks each completed candle once. Flip only when BOTH are true:
-      - the reversion trade is LOSING (P&L < 0)
-      - the completed candle is walking the band against it:
-          SELL open + GREEN candle closed above UPPER -> close SELL, open BUY impulse
-          BUY  open + RED candle closed below LOWER   -> close BUY,  open SELL impulse
-    Only candles that closed AFTER the trade was opened count.
+    REVERSION and TREND trades. Checks each completed candle once (only candles that closed
+    after the trade was opened). The trade must be LOSING.
+
+    REVERSION (walk the band against it):
+      SELL + GREEN candle closes ABOVE UPPER -> close SELL, open BUY impulse
+      BUY  + RED candle closes BELOW LOWER   -> close BUY,  open SELL impulse
+    TREND (reverse logic: price falls back inside the band):
+      BUY  + RED candle closes BELOW UPPER   -> close BUY,  open SELL impulse
+      SELL + GREEN candle closes ABOVE LOWER -> close SELL, open BUY impulse
     Returns True if the trade was flipped.
     """
-    global last_breakout_candle, blocked_band
-    if last_closed is None:
-        return False
-    if last_closed['t'] == last_breakout_candle:
+    global last_breakout_candle
+    if last_closed is None or last_closed['t'] == last_breakout_candle:
         return False
     last_breakout_candle = last_closed['t']
 
@@ -629,33 +650,33 @@ def check_breakout_flip(symbol, pos, last_closed):
     is_buy = pos.type == mt5.POSITION_TYPE_BUY
     o, c = last_closed['open'], last_closed['close']
     up, lo = last_closed['upper'], last_closed['lower']
-    pnl = get_position_pnl(pos)
+    green, red = c > o, c < o
 
-    # Band walk = the completed candle CLOSED outside the band AND moved in that direction
-    walk_up = c > up and c > o      # green candle closed above the upper band
-    walk_down = c < lo and c < o    # red candle closed below the lower band
-
-    if not is_buy and walk_up:
-        new_dir, band = "BUY", 'UPPER'
-        txt = f"green candle closed {c:.2f} ABOVE upper {up:.2f}"
-    elif is_buy and walk_down:
-        new_dir, band = "SELL", 'LOWER'
-        txt = f"red candle closed {c:.2f} BELOW lower {lo:.2f}"
-    else:
+    new_dir, txt = None, ""
+    if mode == 'REV':
+        if not is_buy and green and c > up:
+            new_dir, txt = "BUY", f"green candle closed {c:.2f} ABOVE upper {up:.2f}"
+        elif is_buy and red and c < lo:
+            new_dir, txt = "SELL", f"red candle closed {c:.2f} BELOW lower {lo:.2f}"
+    elif mode == 'TRD':
+        if is_buy and red and c < up:
+            new_dir, txt = "SELL", f"red candle closed {c:.2f} back BELOW upper {up:.2f}"
+        elif not is_buy and green and c > lo:
+            new_dir, txt = "BUY", f"green candle closed {c:.2f} back ABOVE lower {lo:.2f}"
+    if new_dir is None:
         return False
 
-    # The original reversion trade must already be LOSING
+    pnl = get_position_pnl(pos)
+    name = MODE_NAMES[mode]
     if pnl >= 0:
-        logger.info(f"⏳ Band walk [{last_closed['time']}] ({txt}), but #{pos.ticket} is not losing "
+        logger.info(f"⏳ [{last_closed['time']}] {txt}, but {name} #{pos.ticket} is not losing "
                     f"(P&L ${pnl:.2f}). No flip.")
         return False
-    txt += f", reversion P&L ${pnl:.2f}"
+    txt += f", {name.lower()} P&L ${pnl:.2f}"
 
-    logger.warning(f"⚡ BREAKOUT [{last_closed['time']}]: {txt}. Flipping to {new_dir} impulse.")
-    if not close_trade(symbol, pos, "⚡ Breakout - Reversion Closed", f"Breakout: {txt}"):
+    logger.warning(f"⚡ IMPULSE FLIP [{last_closed['time']}]: {txt}. Opening {new_dir} impulse.")
+    if not close_trade(symbol, pos, f"⚡ {name} Closed - Flip", f"Flip: {txt}"):
         return False
-
-    blocked_band = band
     if open_trade(symbol, new_dir, 'IMP'):
         send_push_notification("⚡ Flipped to Impulse",
                                f"{symbol}: {txt}. Opened {new_dir} impulse, TP +${IMP_TAKE_PROFIT_USD:.0f} / SL -${IMP_STOP_LOSS_USD:.0f}.")
@@ -675,7 +696,7 @@ def detect_broker_closes(symbol, current):
             if closed_pnl is None:
                 closed_pnl = last_pnl
             kind = "take profit" if closed_pnl > 0 else "stop loss"
-            name = "Impulse" if mode == 'IMP' else "Reversion"
+            name = MODE_NAMES.get(mode, "Trade")
             logger.warning(f"🛡️ {name} #{ticket} {direction} closed by broker ({kind}) at ${closed_pnl:.2f}.")
             send_push_notification(f"🛡️ {name} Closed ({kind})",
                                    f"{symbol} {direction} #{ticket} closed at ${closed_pnl:.2f}. Bot keeps running.")
@@ -699,10 +720,10 @@ def manage_position(symbol, pos, tick, live, last_closed):
         close_trade(symbol, pos, "🛑 Stop Loss", f"Backup stop -${BACKUP_STOP_USD:.0f}")
         return False
 
-    if mode == 'IMP':
-        # 2a. Impulse: backup take profit (broker TP normally closes first)
+    if mode in ('IMP', 'TRD'):
+        # 2a. Trend / impulse: backup take profit (broker TP normally closes first)
         if BACKUP_TP_USD > 0 and pnl >= BACKUP_TP_USD:
-            close_trade(symbol, pos, "🏁 Impulse Take Profit", f"Profit +${BACKUP_TP_USD:.0f} reached")
+            close_trade(symbol, pos, f"🏁 {MODE_NAMES[mode]} Take Profit", f"Profit +${BACKUP_TP_USD:.0f} reached")
             return False
         target_txt = f"TP {pos.tp:.2f}"
     else:
@@ -716,9 +737,9 @@ def manage_position(symbol, pos, tick, live, last_closed):
                 close_trade(symbol, pos, "🏁 Target Band Reached!", f"Opposite band {target:.2f} reached")
                 return False
 
-        # 3. Reversion: breakout against the trade -> flip to impulse
-        if check_breakout_flip(symbol, pos, last_closed):
-            return True   # a new impulse trade is (normally) open now
+    # 3. Reversion and trend: impulse flip when losing (impulse trades never flip)
+    if mode in ('REV', 'TRD') and check_breakout_flip(symbol, pos, mode, last_closed):
+        return True   # a new impulse trade is (normally) open now
 
     now = time.time()
     if now - last_status_log_time >= 10:
@@ -751,7 +772,7 @@ def manage_active_trade(symbol, tick, live, last_closed):
 # ---------------------------------------------------------------------
 def bot_iteration():
     """One pass of the main loop. Any error is caught in run_bot and the bot continues."""
-    global last_signal_key, phase1_announced
+    global phase1_announced
 
     cumulative_closed_pnl = get_total_closed_pnl()
     if cumulative_closed_pnl >= PHASE_1_TARGET_USD and not phase1_announced:
@@ -763,19 +784,20 @@ def bot_iteration():
     check_challenge_limits(SYMBOL)
 
     tick = mt5.symbol_info_tick(SYMBOL)
-    live, last_closed = get_band_data(SYMBOL)
-    update_band_block(tick, live)
+    live, b, a = get_band_data(SYMBOL)
 
-    if manage_active_trade(SYMBOL, tick, live, last_closed):
+    # 1. Manage the open trade (exits and impulse flip)
+    if manage_active_trade(SYMBOL, tick, live, b):
         return
 
+    # 2. Cooldown after a trade closes
     if time.time() - last_close_time < COOLDOWN_SECONDS:
         return
 
-    side, candle_time = check_reversion_signal(tick, live)
+    # 3. Touch candle A + confirmation candle B -> reversion or trend entry
+    side, mode = check_entry_signal(a, b)
     if side:
-        last_signal_key = (side, candle_time)
-        open_trade(SYMBOL, side, 'REV')
+        open_trade(SYMBOL, side, mode)
 
 
 def run_bot():
@@ -785,16 +807,17 @@ def run_bot():
         time.sleep(10)
 
     logger.info("=" * 65)
-    logger.info(f"🚀 {SYMBOL} Bollinger Reversion + Breakout Flip Bot (24/7, manual stop only)")
+    logger.info(f"🚀 {SYMBOL} Bollinger Confirmation + Impulse Flip Bot (24/7, manual stop only)")
     logger.info(f"Bands: M5 BB({BB_PERIOD}, {BB_DEVIATION}, Close) | Price check every {SLEEP_INTERVAL}s | Lot {TRADE_VOLUME}")
-    logger.info(f"Reversion: touch UPPER -> SELL, touch LOWER -> BUY | target opposite band | SL -${REV_STOP_LOSS_USD:.0f}")
-    logger.info(f"Flip: candle closes beyond the band against the trade -> close it, open impulse with the move")
-    logger.info(f"Impulse: TP +${IMP_TAKE_PROFIT_USD:.0f} | SL -${IMP_STOP_LOSS_USD:.0f}")
+    logger.info(f"Entry: band touch, then wait for the NEXT candle to close")
+    logger.info(f"  opposite candle -> REVERSION (target opposite band, SL -${REV_STOP_LOSS_USD:.0f})")
+    logger.info(f"  same-way candle -> TREND (TP +${TRD_TAKE_PROFIT_USD:.0f}, SL -${TRD_STOP_LOSS_USD:.0f})")
+    logger.info(f"Losing trade + candle against it -> IMPULSE flip (TP +${IMP_TAKE_PROFIT_USD:.0f}, SL -${IMP_STOP_LOSS_USD:.0f})")
     logger.info(f"Alerts only: daily -${MAX_DAILY_LOSS_USD:.0f}, total -${MAX_TOTAL_LOSS_USD:.0f}, max risk -${MAX_RISK_USD:.0f}")
     logger.info("=" * 65)
 
     send_push_notification("🚀 5K Bot Online",
-                           f"{SYMBOL}: reversion at the bands, flip to impulse on breakout "
+                           f"{SYMBOL}: band touch + confirmation candle, impulse flip on losing trades "
                            f"(TP +${IMP_TAKE_PROFIT_USD:.0f} / SL -${IMP_STOP_LOSS_USD:.0f}). Runs 24/7.")
 
     error_notified = False
