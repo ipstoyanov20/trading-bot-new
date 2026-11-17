@@ -24,6 +24,7 @@ import math
 import subprocess
 import threading
 import xml.sax.saxutils as saxutils
+from datetime import datetime, timedelta, timezone
 
 import MetaTrader5 as mt5
 import pandas as pd
@@ -63,10 +64,21 @@ NTFY_TOPIC = "tradingbot_5k_ivaylo"     # Install the ntfy app and subscribe to 
 AI_ENABLED = True
 AI_MODEL = "claude-sonnet-5-5"
 AI_CANDLES = 60                 # How many past candles the AI sees
+AI_MAX_TOKENS = 4000            # Room for the model to think AND write the answer
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# --- News & Fed ---
+CALENDAR_ENABLED = True         # Free economic calendar (high-impact USD events)
+CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+NEWS_WINDOW_MIN = 30            # No trade this many minutes before/after high-impact USD news
+NEWS_SEARCH_ENABLED = True      # AI searches the web for Fed / gold news (costs extra)
+NEWS_REFRESH_MIN = 60           # Search at most once per hour, reused for every signal
+NEWS_MAX_SEARCHES = 2           # Web searches per refresh ($10 per 1,000 searches)
 
 last_signal_candle = None
 last_wait_log = 0
+_calendar_cache = {"time": 0, "events": None}
+_news_cache = {"time": 0, "text": None}
 
 
 # =====================================================================
@@ -95,7 +107,7 @@ def notify(title, message):
         if ENABLE_NTFY_PUSH and NTFY_TOPIC:
             try:
                 requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=message.encode("utf-8"),
-                              headers={"Title": title.encode("utf-8"), "Tags": "chart_with_upwards_trend"},
+                              params={"title": title, "tags": "chart_with_upwards_trend"},
                               timeout=5)
             except Exception as e:
                 logger.debug(f"ntfy error: {e}")
@@ -176,6 +188,95 @@ def build_plan(df, side):
     }
 
 
+
+# =====================================================================
+# NEWS: ECONOMIC CALENDAR + AI WEB SEARCH
+# =====================================================================
+def get_usd_high_impact_events():
+    """High-impact USD events this week (cached for 1 hour). Returns a list or None on failure."""
+    if not CALENDAR_ENABLED:
+        return None
+    if _calendar_cache["events"] is not None and time.time() - _calendar_cache["time"] < 3600:
+        return _calendar_cache["events"]
+    try:
+        r = requests.get(CALENDAR_URL, timeout=15, headers={"User-Agent": "bb-signal-bot"})
+        r.raise_for_status()
+        events = []
+        for e in r.json():
+            if e.get("country") == "USD" and e.get("impact") == "High":
+                try:
+                    when = datetime.fromisoformat(e["date"]).astimezone(timezone.utc)
+                except Exception:
+                    continue
+                events.append({"title": e.get("title", ""), "time": when,
+                               "forecast": e.get("forecast", ""), "previous": e.get("previous", "")})
+        _calendar_cache.update(time=time.time(), events=events)
+        logger.info(f"📅 Calendar updated: {len(events)} high-impact USD events this week.")
+        return events
+    except Exception as e:
+        logger.error(f"Calendar download failed: {e}")
+        return _calendar_cache["events"]
+
+
+def news_near_now():
+    """Returns (events within +/- NEWS_WINDOW_MIN minutes, events in the next 24 hours) or (None, None)."""
+    events = get_usd_high_impact_events()
+    if events is None:
+        return None, None
+    now = datetime.now(timezone.utc)
+    window = timedelta(minutes=NEWS_WINDOW_MIN)
+    near = [e for e in events if abs(e["time"] - now) <= window]
+    upcoming = [e for e in events if now - window <= e["time"] <= now + timedelta(hours=24)]
+    return near, upcoming
+
+
+def fmt_event(e):
+    local = e["time"].astimezone()
+    extra = f" (forecast {e['forecast']}, previous {e['previous']})" if e['forecast'] or e['previous'] else ""
+    return f"{local:%a %H:%M} {e['title']}{extra}"
+
+
+def get_news_summary():
+    """AI web search for the latest Fed / USD / gold news. Cached for NEWS_REFRESH_MIN minutes."""
+    if not (AI_ENABLED and NEWS_SEARCH_ENABLED and ANTHROPIC_API_KEY):
+        return None
+    if _news_cache["text"] and time.time() - _news_cache["time"] < NEWS_REFRESH_MIN * 60:
+        return _news_cache["text"]
+    prompt = (
+        "Search for the most important news of the last 24 hours that moves gold (XAUUSD): "
+        "the Federal Reserve (rate decisions, speeches, expectations), US inflation and jobs data, "
+        "the US dollar, US Treasury yields, and major geopolitical events. "
+        "Reply in Bulgarian with at most 5 short bullet points, facts only, and end with one line: "
+        "'Общ фон за златото: подкрепящ / натискащ / неутрален' with a one-sentence reason. "
+        "No predictions about exact prices."
+    )
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS,
+                  "tools": [{"type": "web_search_20250305", "name": "web_search",
+                             "max_uses": NEWS_MAX_SEARCHES}],
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=120,
+        )
+        if r.status_code != 200:
+            logger.error(f"News HTTP {r.status_code}: {r.text[:500]}")
+            return _news_cache["text"]
+        text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
+        if text:
+            _news_cache.update(time=time.time(), text=text)
+            logger.info(f"📰 News updated:\n{text}")
+        return text or _news_cache["text"]
+    except Exception as e:
+        logger.error(f"News search failed: {e}")
+        return _news_cache["text"]
+
+RR_RULE = "R:R до средната линия >= 1.0"
+VERDICT_BG = {"TAKE": "ВЛИЗАЙ", "SKIP": "ПРОПУСНИ"}
+SIDE_BG = {"BUY": "КУПУВА (BUY)", "SELL": "ПРОДАВА (SELL)"}
+
 # =====================================================================
 # FIXED RULE CHECKLIST (no emotions, same rules every time)
 # =====================================================================
@@ -196,14 +297,15 @@ def rule_checklist(df, plan):
     slope = df['middle'].iloc[-2] - df['middle'].iloc[-12]
 
     checks = {
-        "R:R to middle band >= 1.0": plan['rr'] >= 1.0,
-        "No band walk (max 1 of last 5 candles closed outside)": walk <= 1,
-        "Bands not expanding hard (width <= 1.5x average)": c['width'] <= 1.5 * avg_width,
-        f"RSI confirms ({c['rsi']:.0f})": bool(rsi_ok),
-        "Rejection wick >= candle body": wick >= body,
+        RR_RULE: plan['rr'] >= 1.0,
+        "Няма пълзене по лентата (макс. 1 от последните 5 свещи извън нея)": walk <= 1,
+        "Лентите не се разширяват рязко (ширина <= 1.5x средната)": c['width'] <= 1.5 * avg_width,
+        f"RSI потвърждава ({c['rsi']:.0f})": bool(rsi_ok),
+        "Отхвърляща сянка >= тялото на свещта": wick >= body,
     }
     score = sum(checks.values())
-    verdict = "TAKE" if score >= 4 and checks["R:R to middle band >= 1.0"] else "SKIP"
+    verdict = "TAKE" if score >= 4 and checks[RR_RULE] else "SKIP"
+
     facts = {
         'rsi': round(float(c['rsi']), 1),
         'band_width': round(float(c['width']), 2),
@@ -211,6 +313,14 @@ def rule_checklist(df, plan):
         'middle_slope_10_candles': round(float(slope), 2),
         'closes_outside_band_last5': walk,
     }
+
+    # Hard rule: no trade close to high-impact USD news
+    near, upcoming = news_near_now()
+    if near:
+        verdict = "SKIP"
+    facts['news_now'] = [fmt_event(e) for e in near] if near else []
+    facts['news_next_24h'] = [fmt_event(e) for e in upcoming] if upcoming else []
+    facts['calendar_ok'] = near is not None
     return checks, score, verdict, facts
 
 
@@ -223,14 +333,16 @@ AI_SYSTEM = (
     "language. Judge only from the candles and numbers provided. Check: trend and band walk against the "
     "signal, squeeze or expansion of the bands, RSI, the signal candle's wick, recent support/resistance in "
     "the candles, and the risk:reward to the middle band. The trader has a $5,000 prop account with a $200 "
-    "daily loss limit. Reply with JSON only, no other text: "
+    "daily loss limit. You also get the high-impact USD events from the economic calendar and a short "
+    "summary of today's Fed / USD / gold news. Weigh the news only as context: say SKIP when a major "
+    "event is close or the news clearly pushes hard against the trade. Reply with JSON only, no other text: "
     '{"decision": "TAKE" or "SKIP", "confidence": 1-5, '
-    '"reasons": ["short reason", "..."], "invalidation": "what would prove the trade wrong", '
+    '"reasons": ["short reason", "..."], "invalidation": "in Bulgarian: what would prove the trade wrong", '
     '"summary_bg": "one or two sentences in Bulgarian"}'
 )
 
 
-def ai_review(df, plan, checks, facts):
+def ai_review(df, plan, checks, facts, news):
     if not AI_ENABLED or not ANTHROPIC_API_KEY:
         return None
     cols = ['time', 'open', 'high', 'low', 'close', 'upper', 'middle', 'lower', 'rsi']
@@ -243,7 +355,8 @@ def ai_review(df, plan, checks, facts):
         f"Plan: entry {plan['entry']:.2f}, stop {plan['sl']:.2f}, target {plan['tp']:.2f} (middle band), "
         f"lot {plan['lot']}, risk ${plan['risk_usd']:.2f}, reward ${plan['reward_usd']:.2f}, R:R {plan['rr']:.2f}.\n"
         f"Rule checklist: {json.dumps({k: bool(v) for k, v in checks.items()})}\n"
-        f"Facts: {json.dumps(facts)}\n\n"
+        f"Facts: {json.dumps(facts, ensure_ascii=False)}\n"
+        f"Today's news summary: {news or 'not available'}\n\n"
         f"Last {AI_CANDLES} completed M5 candles (oldest first):\n{candles_csv}"
     )
     try:
@@ -251,13 +364,20 @@ def ai_review(df, plan, checks, facts):
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": AI_MODEL, "max_tokens": 600, "system": AI_SYSTEM,
+            json={"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS, "system": AI_SYSTEM,
                   "messages": [{"role": "user", "content": user_msg}]},
-            timeout=60,
+            timeout=120,
         )
-        r.raise_for_status()
-        text = "".join(b.get("text", "") for b in r.json().get("content", []))
+        if r.status_code != 200:
+            logger.error(f"AI HTTP {r.status_code}: {r.text[:500]}")
+            return {"error": f"HTTP {r.status_code}"}
+        data = r.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
         start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            logger.error(f"AI reply had no JSON (stop_reason={data.get('stop_reason')}, "
+                         f"usage={data.get('usage')}): {text[:500]!r}")
+            return {"error": f"no JSON, stop_reason={data.get('stop_reason')}"}
         return json.loads(text[start:end + 1])
     except Exception as e:
         logger.error(f"AI review failed: {e}")
@@ -292,24 +412,37 @@ def place_trade(plan):
 # =====================================================================
 # MESSAGE
 # =====================================================================
-def format_message(plan, checks, score, verdict, ai):
+def format_message(plan, checks, score, verdict, ai, facts, news):
     lines = [
-        f"{plan['side']} {SYMBOL}  (candle {plan['candle_time']:%H:%M})",
-        f"Entry ~ {plan['entry']:.2f}",
-        f"SL {plan['sl']:.2f}  |  TP {plan['tp']:.2f} (middle band)",
-        f"Lot {plan['lot']}  |  Risk ${plan['risk_usd']:.0f}  |  Reward ${plan['reward_usd']:.0f}  |  R:R {plan['rr']:.2f}",
+        f"{SIDE_BG[plan['side']]} {SYMBOL}  (свещ {plan['candle_time']:%H:%M})",
+        f"Вход ~ {plan['entry']:.2f}",
+        f"Стоп (SL) {plan['sl']:.2f}  |  Цел (TP) {plan['tp']:.2f} (средна линия)",
+        f"Лот {plan['lot']}  |  Риск ${plan['risk_usd']:.0f}  |  Печалба ${plan['reward_usd']:.0f}  |  R:R {plan['rr']:.2f}",
         "",
-        f"Rules {score}/5 -> {verdict}",
+        f"Правила {score}/5 -> {VERDICT_BG[verdict]}",
     ]
-    lines += [f"{'OK ' if ok else 'NO '} {name}" for name, ok in checks.items()]
+    lines += [f"{'✅' if ok else '❌'} {name}" for name, ok in checks.items()]
+    if not facts.get('calendar_ok'):
+        lines.append("⚠️ Календарът с новини не се зареди - провери го сам")
+    elif facts['news_now']:
+        lines.append(f"❌ Важна новина за долара до {NEWS_WINDOW_MIN} мин -> ПРОПУСНИ")
+        lines += [f"    {e}" for e in facts['news_now']]
+    else:
+        lines.append(f"✅ Няма важна новина за долара до {NEWS_WINDOW_MIN} мин")
+    if facts.get('news_next_24h'):
+        lines += ["", "Новини за долара в следващите 24 ч:"] + [f"  {e}" for e in facts['news_next_24h'][:5]]
+    if news:
+        lines += ["", "Новини:", news]
     if ai and "error" not in ai:
-        lines += ["", f"AI: {ai.get('decision')} (confidence {ai.get('confidence')}/5)",
+        lines += ["", f"AI: {VERDICT_BG.get(ai.get('decision'), ai.get('decision'))} "
+                      f"(увереност {ai.get('confidence')}/5)",
                   ai.get('summary_bg', '')]
         if ai.get('invalidation'):
-            lines.append(f"Invalid if: {ai['invalidation']}")
+            lines.append(f"Сделката е грешна, ако: {ai['invalidation']}")
     elif ai:
-        lines += ["", "AI review unavailable this time."]
-    lines += ["", f"Daily loss limit ${DAILY_LOSS_LIMIT_USD:.0f}: max {int(DAILY_LOSS_LIMIT_USD // RISK_PER_TRADE_USD)} losing trades today."]
+        lines += ["", f"AI проверката не се получи ({ai['error']}). Виж CMD прозореца."]
+    lines += ["", f"Дневен лимит ${DAILY_LOSS_LIMIT_USD:.0f}: макс. "
+                  f"{int(DAILY_LOSS_LIMIT_USD // RISK_PER_TRADE_USD)} губещи сделки днес."]
     return "\n".join(lines)
 
 
@@ -342,10 +475,11 @@ def iteration():
         return
 
     checks, score, verdict, facts = rule_checklist(df, plan)
-    ai = ai_review(df, plan, checks, facts)
+    news = get_news_summary()
+    ai = ai_review(df, plan, checks, facts, news)
     final = ai.get('decision', verdict) if ai and "error" not in ai else verdict
-    notify(f"{'🟢' if side == 'BUY' else '🔴'} BB {side} signal - {final}",
-           format_message(plan, checks, score, verdict, ai))
+    notify(f"{'🟢' if side == 'BUY' else '🔴'} Сигнал {side} - {VERDICT_BG.get(final, final)}",
+           format_message(plan, checks, score, verdict, ai, facts, news))
 
     if AUTO_TRADE and verdict == "TAKE":
         place_trade(plan)
@@ -358,7 +492,7 @@ def run():
     mt5.symbol_select(SYMBOL, True)
     logger.info(f"🚀 Classic Bollinger signal bot | {SYMBOL} M5 BB({BB_PERIOD},{BB_DEVIATION}) | "
                 f"AUTO_TRADE={AUTO_TRADE} | AI={'on' if AI_ENABLED and ANTHROPIC_API_KEY else 'off'}")
-    notify("🚀 BB signal bot online", f"Watching {SYMBOL} M5. Signals only, you place the trades.")
+    notify("🚀 Ботът е включен", f"Следя {SYMBOL} на M5. Само сигнали, сделките ги отваряш ти.")
 
     try:
         while True:
