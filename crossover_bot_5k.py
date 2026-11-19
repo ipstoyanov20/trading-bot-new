@@ -12,8 +12,9 @@ WALK_LOOKBACK, WALK_MIN, WALK_ZONE = 10, 4, 0.10
 SL_BUFFER, RISK_USD, MAX_LOT, DAILY_LIMIT = 0.50, 50.0, 1.00, 200.0
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
 NTFY_TOPIC, WINDOWS_TOAST, QUIET_MODE = "tradingbot_5k_ivaylo", True, False
-AI_ENABLED, AI_MODEL, AI_CANDLES, AI_MAX_TOKENS = True, "claude-sonnet-5-5", 60, 4000
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
+GEMINI_MODEL, CLAUDE_MODEL = "gemini-2.5-flash-lite", "claude-sonnet-5-5"
+API_KEY = os.environ.get("GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY", "")
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NEWS_WINDOW_MIN, NEWS_SEARCH, NEWS_REFRESH_MIN, NEWS_SEARCHES = 30, True, 60, 2
 
@@ -36,7 +37,7 @@ AI_SYSTEM = (
     '"invalidation": "in Bulgarian: what would prove the trade wrong", "summary_bg": "1-2 sentences in Bulgarian"}')
 
 
-def notify(title, msg):
+def notify(title, msg, copy=None):
     log.warning(f"📢 {title}\n{msg}")
     def send():
         if WINDOWS_TOAST:
@@ -49,8 +50,11 @@ def notify(title, msg):
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=5)
             except Exception:
                 pass
+        body = {"topic": NTFY_TOPIC, "title": title, "message": msg}
+        if copy:
+            body["actions"] = [{"action": "copy", "label": f"📋 {k} {v}", "value": v} for k, v in copy]
         try:
-            requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=msg.encode(), params={"title": title}, timeout=10)
+            requests.post("https://ntfy.sh/", json=body, timeout=10)
         except Exception as e:
             log.debug(e)
     threading.Thread(target=send, daemon=True).start()
@@ -142,15 +146,38 @@ def fmt_event(e):
     return f"{e['time'].astimezone():%a %H:%M} {e['title']}{extra}"
 
 
-def call_ai(payload):
+def call_ai(system, user, search=False):
     try:
-        r = requests.post("https://api.anthropic.com/v1/messages", json=payload, timeout=120,
-                          headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+        if AI_PROVIDER == "gemini":
+            body = {"contents": [{"role": "user", "parts": [{"text": user}]}],
+                    "generationConfig": {"maxOutputTokens": AI_MAX_TOKENS}}
+            if system:
+                body["systemInstruction"] = {"parts": [{"text": system}]}
+            if search:
+                body["tools"] = [{"google_search": {}}]
+            else:
+                body["generationConfig"]["responseMimeType"] = "application/json"
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                              json=body, timeout=120, headers={"x-goog-api-key": API_KEY})
+        else:
+            body = {"model": CLAUDE_MODEL, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "user", "content": user}]}
+            if system:
+                body["system"] = system
+            if search:
+                body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": NEWS_SEARCHES}]
+            r = requests.post("https://api.anthropic.com/v1/messages", json=body, timeout=120,
+                              headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01"})
         if r.status_code != 200:
             log.error(f"AI HTTP {r.status_code}: {r.text[:500]}")
             return None, f"HTTP {r.status_code}"
         data = r.json()
-        return data, "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        if AI_PROVIDER == "gemini":
+            cand = (data.get("candidates") or [{}])[0]
+            text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
+            data["stop_reason"] = cand.get("finishReason")
+        else:
+            text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        return data, text.strip()
     except Exception as e:
         log.error(f"AI request failed: {e}")
         return None, str(e)
@@ -165,8 +192,7 @@ def news_summary():
               "US inflation and jobs data, the US dollar, US Treasury yields and major geopolitical events. Reply in "
               "Bulgarian with at most 5 short bullet points, facts only, and end with one line: 'Общ фон за златото: "
               "подкрепящ / натискащ / неутрален' with a one-sentence reason. No price predictions.")
-    data, text = call_ai({"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "user", "content": prompt}],
-                          "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": NEWS_SEARCHES}]})
+    data, text = call_ai(None, prompt, search=True)
     if data and text:
         news_cache.update(t=time.time(), text=text)
         log.info(f"📰 News:\n{text}")
@@ -221,8 +247,7 @@ def ai_review(df, plan, checks, facts, news):
            f"Rules: {json.dumps({k: bool(v) for k, v in checks.items()}, ensure_ascii=False)}\n"
            f"Facts: {json.dumps(facts, ensure_ascii=False)}\nNews: {news or 'not available'}\n\n"
            f"Last {AI_CANDLES} completed M5 candles:\n{h.round(2).to_csv(index=False)}")
-    data, text = call_ai({"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS, "system": AI_SYSTEM,
-                          "messages": [{"role": "user", "content": msg}]})
+    data, text = call_ai(AI_SYSTEM, msg)
     if not data:
         return {"error": text}
     try:
@@ -301,7 +326,8 @@ def iteration():
     ai = ai_review(df, plan, checks, facts, news)
     final = "SKIP" if verdict == "SKIP" else (ai.get('decision', verdict) if ai and "error" not in ai else verdict)
     notify(f"{'🟢' if side == 'BUY' else '🔴'} Сигнал {side} ({TYPE_BG[kind]}) - {VERDICT_BG.get(final, final)}",
-           message(plan, checks, score, verdict, ai, facts, news))
+           message(plan, checks, score, verdict, ai, facts, news),
+           copy=[("Вход", f"{plan['entry']:.2f}"), ("SL", f"{plan['sl']:.2f}"), ("TP", f"{plan['tp']:.2f}")])
     if AUTO_TRADE and final == "TAKE":
         place_trade(plan)
 
@@ -311,7 +337,7 @@ def run():
         log.error(f"MT5 init failed: {mt5.last_error()}. Retrying in 10s...")
         time.sleep(10)
     mt5.symbol_select(SYMBOL, True)
-    log.info(f"🚀 BB signal bot | {SYMBOL} M5 | AUTO_TRADE={AUTO_TRADE} | AI={'on' if AI_ENABLED and API_KEY else 'off'} | QUIET={QUIET_MODE}")
+    log.info(f"🚀 BB signal bot | {SYMBOL} M5 | AUTO_TRADE={AUTO_TRADE} | AI={AI_PROVIDER if AI_ENABLED and API_KEY else 'off'} | QUIET={QUIET_MODE}")
     notify("🚀 Ботът е включен", f"Следя {SYMBOL} на M5: обратни сигнали и сигнали по тренда. Сделките ги отваряш ти.")
     try:
         while True:
