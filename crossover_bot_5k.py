@@ -13,10 +13,10 @@ SL_BUFFER, RISK_USD, MAX_LOT, DAILY_LIMIT = 0.50, 50.0, 1.00, 200.0
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
 NTFY_TOPIC, WINDOWS_TOAST, QUIET_MODE = "tradingbot_5k_ivaylo", True, False
 AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
-GEMINI_MODEL, CLAUDE_MODEL = "gemini-2.5-flash-lite", "claude-sonnet-5-5"
+GEMINI_MODEL, CLAUDE_MODEL = "gemini-3.5-flash-lite", "claude-sonnet-5-5"
 API_KEY = os.environ.get("GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY", "")
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-NEWS_WINDOW_MIN, NEWS_SEARCH, NEWS_REFRESH_MIN, NEWS_SEARCHES = 30, True, 60, 2
+NEWS_WINDOW_MIN, NEWS_SEARCH, NEWS_REFRESH_MIN, NEWS_SEARCHES = 30, False, 60, 2
 
 RR_RULE = "R:R до целта >= 1.0"
 VERDICT_BG = {"TAKE": "ВЛИЗАЙ", "SKIP": "ПРОПУСНИ"}
