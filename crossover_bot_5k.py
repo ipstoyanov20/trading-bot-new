@@ -12,6 +12,8 @@ WALK_LOOKBACK, WALK_MIN, WALK_ZONE = 10, 4, 0.10
 SL_BUFFER, RISK_USD, MAX_LOT, DAILY_LIMIT = 0.50, 50.0, 1.00, 200.0
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
 NTFY_TOPIC, WINDOWS_TOAST, QUIET_MODE = "tradingbot_5k_ivaylo", True, False
+MT5_PUSH, NTFY_ENABLED = True, False
+PUSH_DIR = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
 AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
 GEMINI_MODEL, CLAUDE_MODEL = "gemini-3.5-flash-lite", "claude-sonnet-5-5"
 API_KEY = os.environ.get("GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY", "")
@@ -37,8 +39,21 @@ AI_SYSTEM = (
     '"invalidation": "in Bulgarian: what would prove the trade wrong", "summary_bg": "1-2 sentences in Bulgarian"}')
 
 
-def notify(title, msg, copy=None):
+def mt5_push(text):
+    try:
+        os.makedirs(PUSH_DIR, exist_ok=True)
+        name = os.path.join(PUSH_DIR, f"bb_push_{time.time_ns()}")
+        with open(name + ".tmp", "w", encoding="utf-8") as f:
+            f.write(text[:255])
+        os.replace(name + ".tmp", name + ".txt")
+    except Exception as e:
+        log.error(f"MT5 push file failed: {e}")
+
+
+def notify(title, msg, copy=None, push=None):
     log.warning(f"📢 {title}\n{msg}")
+    if MT5_PUSH:
+        mt5_push(push or f"{title}\n{msg}")
     def send():
         if WINDOWS_TOAST:
             try:
@@ -50,6 +65,8 @@ def notify(title, msg, copy=None):
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=5)
             except Exception:
                 pass
+        if not NTFY_ENABLED:
+            return
         body = {"topic": NTFY_TOPIC, "title": title, "message": msg}
         if copy:
             body["actions"] = [{"action": "copy", "label": f"📋 {k} {v}", "value": v} for k, v in copy]
@@ -300,6 +317,20 @@ def message(p, checks, score, verdict, ai, f, news):
     return "\n".join(L)
 
 
+def push_text(p, score, verdict, final, ai):
+    head = (f"{'🟢' if p['side'] == 'BUY' else '🔴'} {p['side']} {SYMBOL} ({TYPE_BG[p['type']]}) - {VERDICT_BG.get(final, final)}\n"
+            f"Вход {p['entry']:.2f} | SL {p['sl']:.2f} | TP {p['tp']:.2f}\n"
+            f"Лот {p['lot']} | Риск ${p['risk']:.0f} | R:R {p['rr']:.2f} | Правила {score}/5")
+    if ai and "error" not in ai:
+        tail = f"\nAI {VERDICT_BG.get(ai.get('decision'), ai.get('decision'))} {ai.get('confidence')}/5: {ai.get('summary_bg', '')}"
+    elif ai:
+        tail = "\nAI: няма отговор"
+    else:
+        tail = ""
+    text = head + tail
+    return text if len(text) <= 255 else text[:252] + "..."
+
+
 def iteration():
     df = get_candles()
     if df.empty or pd.isna(df.iloc[-2]['upper']) or df.iloc[-2]['time'] == state["candle"]:
@@ -327,7 +358,8 @@ def iteration():
     final = "SKIP" if verdict == "SKIP" else (ai.get('decision', verdict) if ai and "error" not in ai else verdict)
     notify(f"{'🟢' if side == 'BUY' else '🔴'} Сигнал {side} ({TYPE_BG[kind]}) - {VERDICT_BG.get(final, final)}",
            message(plan, checks, score, verdict, ai, facts, news),
-           copy=[("Вход", f"{plan['entry']:.2f}"), ("SL", f"{plan['sl']:.2f}"), ("TP", f"{plan['tp']:.2f}")])
+           copy=[("Вход", f"{plan['entry']:.2f}"), ("SL", f"{plan['sl']:.2f}"), ("TP", f"{plan['tp']:.2f}")],
+           push=push_text(plan, score, verdict, final, ai))
     if AUTO_TRADE and final == "TAKE":
         place_trade(plan)
 
@@ -338,7 +370,8 @@ def run():
         time.sleep(10)
     mt5.symbol_select(SYMBOL, True)
     log.info(f"🚀 BB signal bot | {SYMBOL} M5 | AUTO_TRADE={AUTO_TRADE} | AI={AI_PROVIDER if AI_ENABLED and API_KEY else 'off'} | QUIET={QUIET_MODE}")
-    notify("🚀 Ботът е включен", f"Следя {SYMBOL} на M5: обратни сигнали и сигнали по тренда. Сделките ги отваряш ти.")
+    notify("🚀 Ботът е включен", f"Следя {SYMBOL} на M5: обратни сигнали и сигнали по тренда. Сделките ги отваряш ти.",
+           push=f"🚀 Ботът е включен. Следя {SYMBOL} M5.")
     try:
         while True:
             try:
