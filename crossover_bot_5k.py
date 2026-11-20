@@ -12,7 +12,7 @@ WALK_LOOKBACK, WALK_MIN, WALK_ZONE = 10, 4, 0.10
 SL_BUFFER, RISK_USD, MAX_LOT, DAILY_LIMIT = 0.50, 50.0, 1.00, 200.0
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
 NTFY_TOPIC, WINDOWS_TOAST, QUIET_MODE = "tradingbot_5k_ivaylo", True, False
-MT5_PUSH, NTFY_ENABLED = True, False
+MT5_PUSH, NTFY_ENABLED = False, True
 PUSH_DIR = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
 AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
 GEMINI_MODEL, CLAUDE_MODEL = "gemini-3.5-flash-lite", "claude-sonnet-5-5"
@@ -39,10 +39,10 @@ AI_SYSTEM = (
     '"invalidation": "in Bulgarian: what would prove the trade wrong", "summary_bg": "1-2 sentences in Bulgarian"}')
 
 
-def mt5_push(text):
+def mt5_push(text, order=0):
     try:
         os.makedirs(PUSH_DIR, exist_ok=True)
-        name = os.path.join(PUSH_DIR, f"bb_push_{time.time_ns()}")
+        name = os.path.join(PUSH_DIR, f"bb_push_{time.time_ns()}_{order}")
         with open(name + ".tmp", "w", encoding="utf-8") as f:
             f.write(text[:255])
         os.replace(name + ".tmp", name + ".txt")
@@ -53,7 +53,8 @@ def mt5_push(text):
 def notify(title, msg, copy=None, push=None):
     log.warning(f"📢 {title}\n{msg}")
     if MT5_PUSH:
-        mt5_push(push or f"{title}\n{msg}")
+        for i, part in enumerate(push if isinstance(push, list) else [push or f"{title}\n{msg}"]):
+            mt5_push(part, i)
     def send():
         if WINDOWS_TOAST:
             try:
@@ -291,7 +292,7 @@ def place_trade(p):
 def message(p, checks, score, verdict, ai, f, news):
     walk = {"DOWN": "пълзене по долната лента (низходящ тренд)",
             "UP": "пълзене по горната лента (възходящ тренд)"}.get(f['band_walk'], "няма тренд по лентата")
-    L = [f"{SIDE_BG[p['side']]} {SYMBOL} - {TYPE_BG[p['type']]} сигнал  (свещ {p['time']:%H:%M})", f"Пазар: {walk}",
+    L = [f"{SIDE_BG[p['side']]} {SYMBOL} - {TYPE_BG[p['type']]} сигнал  (свещта затвори {p['time'] + timedelta(minutes=5):%H:%M}, изпратено {datetime.now():%H:%M:%S})", f"Пазар: {walk}",
          f"Вход ~ {p['entry']:.2f}", f"Стоп (SL) {p['sl']:.2f}  |  Цел (TP) {p['tp']:.2f} ({p['tp_name']})",
          f"Лот {p['lot']}  |  Риск ${p['risk']:.0f}  |  Печалба ${p['reward']:.0f}  |  R:R {p['rr']:.2f}",
          "", f"Правила {score}/5 -> {VERDICT_BG[verdict]}"]
@@ -318,17 +319,16 @@ def message(p, checks, score, verdict, ai, f, news):
 
 
 def push_text(p, score, verdict, final, ai):
-    head = (f"{'🟢' if p['side'] == 'BUY' else '🔴'} {p['side']} {SYMBOL} ({TYPE_BG[p['type']]}) - {VERDICT_BG.get(final, final)}\n"
-            f"Вход {p['entry']:.2f} | SL {p['sl']:.2f} | TP {p['tp']:.2f}\n"
-            f"Лот {p['lot']} | Риск ${p['risk']:.0f} | R:R {p['rr']:.2f} | Правила {score}/5")
+    cut = lambda t: t if len(t) <= 255 else t[:252] + "..."
+    sig = (f"{'🟢' if p['side'] == 'BUY' else '🔴'} {p['side']} {SYMBOL} ({TYPE_BG[p['type']]}) - {VERDICT_BG.get(final, final)}\n"
+           f"Вход {p['entry']:.2f}\nSL {p['sl']:.2f}\nTP {p['tp']:.2f}\n"
+           f"Лот {p['lot']} | Риск ${p['risk']:.0f} | R:R {p['rr']:.2f} | Правила {score}/5")
     if ai and "error" not in ai:
-        tail = f"\nAI {VERDICT_BG.get(ai.get('decision'), ai.get('decision'))} {ai.get('confidence')}/5: {ai.get('summary_bg', '')}"
-    elif ai:
-        tail = "\nAI: няма отговор"
-    else:
-        tail = ""
-    text = head + tail
-    return text if len(text) <= 255 else text[:252] + "..."
+        adv = f"🤖 AI: {VERDICT_BG.get(ai.get('decision'), ai.get('decision'))} ({ai.get('confidence')}/5)\n{ai.get('summary_bg', '')}"
+        if ai.get('invalidation'):
+            adv += f"\nГрешна, ако: {ai['invalidation']}"
+        return [cut(sig), cut(adv)]
+    return [cut(sig), "🤖 AI: няма отговор, виж CMD"] if ai else [cut(sig)]
 
 
 def iteration():
