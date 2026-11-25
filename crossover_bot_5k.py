@@ -9,9 +9,12 @@ log = logging.getLogger(__name__)
 
 SYMBOL, TIMEFRAME, BB_PERIOD, BB_DEV, RSI_PERIOD = "XAUUSD", mt5.TIMEFRAME_M5, 20, 2.0, 14
 WALK_LOOKBACK, WALK_MIN, WALK_ZONE = 10, 4, 0.10
-SL_BUFFER, RISK_USD, MAX_LOT, DAILY_LIMIT = 0.50, 50.0, 1.00, 200.0
+SL_BUFFER, MAX_LOT = 0.50, 1.00
+ACCOUNT_BALANCE, USE_MT5_BALANCE, RISK_PCT = 5000.0, False, 1.0
+FIXED_LOT, MAX_RISK_USD = 0.10, 150.0
+MIN_PROFIT_USD, DAILY_LOSS_PCT, ONLY_TAKE = 50.0, 4.0, True
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
-NTFY_TOPIC, WINDOWS_TOAST, QUIET_MODE = "tradingbot_5k_ivaylo", True, False
+NTFY_TOPIC, WINDOWS_TOAST = "tradingbot_5k_ivaylo", True
 MT5_PUSH, NTFY_ENABLED = False, True
 PUSH_DIR = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
 AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
@@ -21,7 +24,7 @@ API_KEY = os.environ.get("GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHR
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NEWS_WINDOW_MIN, NEWS_SEARCH, NEWS_REFRESH_MIN, NEWS_SEARCHES = 30, False, 60, 2
 
-RR_RULE = "R:R до целта >= 1.0"
+RR_RULE = "R:R до целта > 1.0 (рискът е по-малък от печалбата)"
 VERDICT_BG = {"TAKE": "ВЛИЗАЙ", "SKIP": "ПРОПУСНИ"}
 SIDE_BG = {"BUY": "КУПУВА (BUY)", "SELL": "ПРОДАВА (SELL)"}
 TYPE_BG = {"REVERSION": "обратен", "TREND": "по тренда"}
@@ -122,10 +125,18 @@ def find_signal(df):
     return None, None, walk
 
 
+def get_balance():
+    if USE_MT5_BALANCE:
+        acc = mt5.account_info()
+        if acc is not None and acc.balance > 0:
+            return float(acc.balance)
+    return ACCOUNT_BALANCE
+
+
 def build_plan(df, side, kind):
     c, tick, info = df.iloc[-2], mt5.symbol_info_tick(SYMBOL), mt5.symbol_info(SYMBOL)
     if tick is None or info is None:
-        return None
+        return None, "no price data"
     contract, step, vmin = info.trade_contract_size or 100.0, info.volume_step or 0.01, info.volume_min or 0.01
     if kind == 'REVERSION':
         tp, tp_name = c['middle'], "средна линия"
@@ -138,10 +149,25 @@ def build_plan(df, side, kind):
         entry, sl = tick.bid, c['high'] + SL_BUFFER
         sl_d, tp_d = sl - entry, entry - tp
     if sl_d <= 0 or tp_d <= 0:
-        return None
-    lot = round(min(max(math.floor(RISK_USD / (sl_d * contract) / step) * step, vmin), MAX_LOT), 2)
+        return None, "price already past the stop or the target"
+    if tp_d <= sl_d:
+        return None, f"risk is not smaller than the profit (R:R {tp_d / sl_d:.2f})"
+    balance = get_balance()
+    if FIXED_LOT:
+        lot = FIXED_LOT
+        budget = MAX_RISK_USD
+    else:
+        budget = balance * RISK_PCT / 100
+        lot = round(min(math.floor(budget / (sl_d * contract) / step + 1e-9) * step, MAX_LOT), 2)
+        if lot < vmin:
+            return None, f"stop too wide: even {vmin} lots risks more than ${budget:.0f}"
+    reward, risk = tp_d * contract * lot, sl_d * contract * lot
+    if risk > MAX_RISK_USD:
+        return None, f"risk ${risk:.0f} at lot {lot} is over the ${MAX_RISK_USD:.0f} max risk"
+    if reward <= MIN_PROFIT_USD:
+        return None, f"profit ${reward:.0f} at lot {lot} is not over ${MIN_PROFIT_USD:.0f}"
     return dict(side=side, type=kind, entry=entry, sl=sl, tp=tp, tp_name=tp_name, lot=lot, rr=tp_d / sl_d,
-                risk=sl_d * contract * lot, reward=tp_d * contract * lot, time=c['time'])
+                risk=risk, reward=reward, time=c['time'], balance=balance, budget=budget), None
 
 
 def usd_events():
@@ -243,7 +269,7 @@ def checklist(df, plan, walk):
         p5 = df.iloc[-7:-2]
         out = int((p5['close'] < p5['lower']).sum() if side == 'BUY' else (p5['close'] > p5['upper']).sum())
         wick, rsi_ok = (lo_wick, c['rsi'] <= 35) if side == 'BUY' else (up_wick, c['rsi'] >= 65)
-        checks = {RR_RULE: plan['rr'] >= 1.0,
+        checks = {RR_RULE: plan['rr'] > 1.0,
                   "Няма пълзене по лентата (макс. 1 от последните 5 свещи извън нея)": out <= 1,
                   "Лентите не се разширяват рязко (ширина <= 1.5x средната)": c['width'] <= 1.5 * avg_w,
                   f"RSI потвърждава ({c['rsi']:.0f})": bool(rsi_ok),
@@ -251,7 +277,7 @@ def checklist(df, plan, walk):
     else:
         wick, rsi_ok, slope_ok = (up_wick, c['rsi'] <= 55, slope < 0) if side == 'SELL' else (lo_wick, c['rsi'] >= 45, slope > 0)
         n = band_walk(df)[1]
-        checks = {RR_RULE: plan['rr'] >= 1.0,
+        checks = {RR_RULE: plan['rr'] > 1.0,
                   f"Силен тренд ({n} от последните {WALK_LOOKBACK} свещи са до лентата)": n >= WALK_MIN,
                   "Средната линия върви по посоката на сделката": bool(slope_ok),
                   f"RSI не е обърнал тренда ({c['rsi']:.0f})": bool(rsi_ok),
@@ -311,6 +337,8 @@ def message(p, checks, score, verdict, ai, f, news):
     L = [f"{SIDE_BG[p['side']]} {SYMBOL} - {TYPE_BG[p['type']]} сигнал  (свещта затвори {p['time'] + timedelta(minutes=5):%H:%M}, изпратено {datetime.now():%H:%M:%S})", f"Пазар: {walk}",
          f"Вход ~ {p['entry']:.2f}", f"Стоп (SL) {p['sl']:.2f}  |  Цел (TP) {p['tp']:.2f} ({p['tp_name']})",
          f"Лот {p['lot']}  |  Риск ${p['risk']:.0f}  |  Печалба ${p['reward']:.0f}  |  R:R {p['rr']:.2f}",
+         (f"Фиксиран лот {FIXED_LOT} | Мин. печалба ${MIN_PROFIT_USD:.0f} | Макс. риск ${MAX_RISK_USD:.0f}" if FIXED_LOT else
+          f"Баланс ${p['balance']:,.0f} -> риск {RISK_PCT:g}% = до ${p['budget']:.0f} на сделка"),
          "", f"Правила {score}/5 -> {VERDICT_BG[verdict]}"]
     L += [f"{'✅' if ok else '❌'} {name}" for name, ok in checks.items()]
     if not f['calendar_ok']:
@@ -330,7 +358,8 @@ def message(p, checks, score, verdict, ai, f, news):
             L.append(f"Сделката е грешна, ако: {ai['invalidation']}")
     elif ai:
         L += ["", f"AI проверката не се получи ({ai['error']}). Виж CMD прозореца."]
-    L += ["", f"Дневен лимит ${DAILY_LIMIT:.0f}: макс. {int(DAILY_LIMIT // RISK_USD)} губещи сделки днес."]
+    daily = p['balance'] * DAILY_LOSS_PCT / 100
+    L += ["", f"Дневен лимит ${daily:.0f} ({DAILY_LOSS_PCT:g}%): макс. {int(daily // p['risk'])} губещи сделки като тази днес."]
     return "\n".join(L)
 
 
@@ -363,15 +392,19 @@ def iteration():
             log.info(f"⏳ No signal | Close {c['close']:.2f} | Upper {c['upper']:.2f}, Mid {c['middle']:.2f}, "
                      f"Lower {c['lower']:.2f} | Walk: {walk or 'none'}")
         return
-    plan = build_plan(df, side, kind)
+    plan, why = build_plan(df, side, kind)
     if plan is None:
-        return log.info(f"{side} {kind} skipped: price already past the stop or the target")
+        return log.info(f"⛔ {side} {kind} skipped: {why}")
     checks, score, verdict, facts = checklist(df, plan, walk)
-    if QUIET_MODE and verdict == "SKIP":
-        return log.info(f"🔇 {side} {kind}: rules {score}/5 -> SKIP (quiet mode)")
+    if ONLY_TAKE and verdict == "SKIP":
+        return log.info(f"⛔ {side} {kind}: rules {score}/5 -> SKIP, not sent")
     news = news_summary()
     ai = ai_review(df, plan, checks, facts, news)
-    final = "SKIP" if verdict == "SKIP" else (ai.get('decision', verdict) if ai and "error" not in ai else verdict)
+    ai_ok = bool(ai) and "error" not in ai
+    final = "SKIP" if verdict == "SKIP" else (ai.get('decision', "SKIP") if ai_ok else ("SKIP" if ONLY_TAKE else verdict))
+    if ONLY_TAKE and final != "TAKE":
+        why = ai.get('summary_bg', '') if ai_ok else ("AI unavailable" if ai else "AI is off")
+        return log.info(f"⛔ {side} {kind}: rules TAKE, AI {final} -> not sent. {why}")
     notify(f"{'🟢' if side == 'BUY' else '🔴'} Сигнал {side} ({TYPE_BG[kind]}) - {VERDICT_BG.get(final, final)}",
            message(plan, checks, score, verdict, ai, facts, news),
            copy=[("Вход", f"{plan['entry']:.2f}"), ("SL", f"{plan['sl']:.2f}"), ("TP", f"{plan['tp']:.2f}")],
@@ -385,7 +418,7 @@ def run():
         log.error(f"MT5 init failed: {mt5.last_error()}. Retrying in 10s...")
         time.sleep(10)
     mt5.symbol_select(SYMBOL, True)
-    log.info(f"🚀 BB signal bot | {SYMBOL} M5 | AUTO_TRADE={AUTO_TRADE} | AI={AI_PROVIDER if AI_ENABLED and API_KEY else 'off'} | QUIET={QUIET_MODE}")
+    log.info(f"🚀 BB signal bot | {SYMBOL} M5 | AUTO_TRADE={AUTO_TRADE} | AI={AI_PROVIDER if AI_ENABLED and API_KEY else 'off'} | ONLY_TAKE={ONLY_TAKE} | lot {FIXED_LOT or f"{RISK_PCT:g}% risk"} | min profit ${MIN_PROFIT_USD:.0f} | max risk ${MAX_RISK_USD:.0f}")
     notify("🚀 Ботът е включен", f"Следя {SYMBOL} на M5: обратни сигнали и сигнали по тренда. Сделките ги отваряш ти.",
            push=f"🚀 Ботът е включен. Следя {SYMBOL} M5.")
     try:
