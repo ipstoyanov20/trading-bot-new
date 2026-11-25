@@ -16,6 +16,7 @@ MT5_PUSH, NTFY_ENABLED = False, True
 PUSH_DIR = os.path.expandvars(r"%APPDATA%\MetaQuotes\Terminal\Common\Files")
 AI_ENABLED, AI_PROVIDER, AI_CANDLES, AI_MAX_TOKENS = True, "gemini", 60, 4000
 GEMINI_MODEL, CLAUDE_MODEL = "gemini-3.5-flash-lite", "claude-sonnet-5-5"
+GEMINI_FALLBACK, AI_RETRY_WAITS = ["gemini-3.5-flash"], [0, 3, 8]
 API_KEY = os.environ.get("GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY", "")
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NEWS_WINDOW_MIN, NEWS_SEARCH, NEWS_REFRESH_MIN, NEWS_SEARCHES = 30, False, 60, 2
@@ -164,41 +165,56 @@ def fmt_event(e):
     return f"{e['time'].astimezone():%a %H:%M} {e['title']}{extra}"
 
 
+def _post_ai(model, system, user, search):
+    if AI_PROVIDER == "gemini":
+        body = {"contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"maxOutputTokens": AI_MAX_TOKENS}}
+        if system:
+            body["systemInstruction"] = {"parts": [{"text": system}]}
+        if search:
+            body["tools"] = [{"google_search": {}}]
+        else:
+            body["generationConfig"]["responseMimeType"] = "application/json"
+        return requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                             json=body, timeout=60, headers={"x-goog-api-key": API_KEY})
+    body = {"model": model, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "user", "content": user}]}
+    if system:
+        body["system"] = system
+    if search:
+        body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": NEWS_SEARCHES}]
+    return requests.post("https://api.anthropic.com/v1/messages", json=body, timeout=60,
+                         headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01"})
+
+
 def call_ai(system, user, search=False):
-    try:
-        if AI_PROVIDER == "gemini":
-            body = {"contents": [{"role": "user", "parts": [{"text": user}]}],
-                    "generationConfig": {"maxOutputTokens": AI_MAX_TOKENS}}
-            if system:
-                body["systemInstruction"] = {"parts": [{"text": system}]}
-            if search:
-                body["tools"] = [{"google_search": {}}]
-            else:
-                body["generationConfig"]["responseMimeType"] = "application/json"
-            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-                              json=body, timeout=120, headers={"x-goog-api-key": API_KEY})
-        else:
-            body = {"model": CLAUDE_MODEL, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "user", "content": user}]}
-            if system:
-                body["system"] = system
-            if search:
-                body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": NEWS_SEARCHES}]
-            r = requests.post("https://api.anthropic.com/v1/messages", json=body, timeout=120,
-                              headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01"})
-        if r.status_code != 200:
-            log.error(f"AI HTTP {r.status_code}: {r.text[:500]}")
-            return None, f"HTTP {r.status_code}"
-        data = r.json()
-        if AI_PROVIDER == "gemini":
-            cand = (data.get("candidates") or [{}])[0]
-            text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
-            data["stop_reason"] = cand.get("finishReason")
-        else:
-            text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-        return data, text.strip()
-    except Exception as e:
-        log.error(f"AI request failed: {e}")
-        return None, str(e)
+    models = [GEMINI_MODEL] + GEMINI_FALLBACK if AI_PROVIDER == "gemini" else [CLAUDE_MODEL]
+    err = "no model"
+    for model in models:
+        for wait in AI_RETRY_WAITS:
+            time.sleep(wait)
+            try:
+                r = _post_ai(model, system, user, search)
+            except Exception as e:
+                err = str(e)
+                log.warning(f"AI {model} request failed: {e}")
+                continue
+            if r.status_code == 200:
+                data = r.json()
+                if AI_PROVIDER == "gemini":
+                    cand = (data.get("candidates") or [{}])[0]
+                    text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
+                    data["stop_reason"] = cand.get("finishReason")
+                else:
+                    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                if model != models[0]:
+                    log.info(f"AI answered with fallback model {model}")
+                return data, text.strip()
+            err = f"HTTP {r.status_code}"
+            log.warning(f"AI {model} HTTP {r.status_code}: {r.text[:200]}")
+            if r.status_code not in (429, 500, 502, 503, 504):
+                break
+    log.error(f"AI failed on all models: {err}")
+    return None, err
 
 
 def news_summary():
