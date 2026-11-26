@@ -13,6 +13,7 @@ SL_BUFFER, MAX_LOT = 0.50, 1.00
 ACCOUNT_BALANCE, USE_MT5_BALANCE, RISK_PCT = 5000.0, False, 1.0
 FIXED_LOT, MAX_RISK_USD = 0.10, 150.0
 MIN_PROFIT_USD, DAILY_LOSS_PCT, ONLY_TAKE = 50.0, 4.0, True
+NEAR_ALERTS, NEAR_ZONE, ALERT_EVERY_MIN = True, 0.10, 5
 AUTO_TRADE, MAGIC, DEVIATION = False, 60030, 20
 NTFY_TOPIC, WINDOWS_TOAST = "tradingbot_5k_ivaylo", True
 MT5_PUSH, NTFY_ENABLED = False, True
@@ -28,7 +29,7 @@ RR_RULE = "R:R до целта > 1.0 (рискът е по-малък от пе�
 VERDICT_BG = {"TAKE": "ВЛИЗАЙ", "SKIP": "ПРОПУСНИ"}
 SIDE_BG = {"BUY": "КУПУВА (BUY)", "SELL": "ПРОДАВА (SELL)"}
 TYPE_BG = {"REVERSION": "обратен", "TREND": "по тренда"}
-state = {"candle": None, "wait_log": 0, "walk": None}
+state = {"candle": None, "wait_log": 0, "walk": None, "alerts": {}}
 cal_cache, news_cache = {"t": 0, "ev": None}, {"t": 0, "text": None}
 
 AI_SYSTEM = (
@@ -133,7 +134,7 @@ def get_balance():
     return ACCOUNT_BALANCE
 
 
-def build_plan(df, side, kind):
+def build_plan(df, side, kind, strict=True):
     c, tick, info = df.iloc[-2], mt5.symbol_info_tick(SYMBOL), mt5.symbol_info(SYMBOL)
     if tick is None or info is None:
         return None, "no price data"
@@ -150,8 +151,9 @@ def build_plan(df, side, kind):
         sl_d, tp_d = sl - entry, entry - tp
     if sl_d <= 0 or tp_d <= 0:
         return None, "price already past the stop or the target"
+    problems = []
     if tp_d <= sl_d:
-        return None, f"risk is not smaller than the profit (R:R {tp_d / sl_d:.2f})"
+        problems.append(f"рискът не е по-малък от печалбата (R:R {tp_d / sl_d:.2f})")
     balance = get_balance()
     if FIXED_LOT:
         lot = FIXED_LOT
@@ -160,14 +162,17 @@ def build_plan(df, side, kind):
         budget = balance * RISK_PCT / 100
         lot = round(min(math.floor(budget / (sl_d * contract) / step + 1e-9) * step, MAX_LOT), 2)
         if lot < vmin:
-            return None, f"stop too wide: even {vmin} lots risks more than ${budget:.0f}"
+            lot = vmin
+            problems.append(f"стопът е твърде далеч: дори {vmin} лота рискуват над ${budget:.0f}")
     reward, risk = tp_d * contract * lot, sl_d * contract * lot
     if risk > MAX_RISK_USD:
-        return None, f"risk ${risk:.0f} at lot {lot} is over the ${MAX_RISK_USD:.0f} max risk"
+        problems.append(f"риск ${risk:.0f} е над максимума ${MAX_RISK_USD:.0f}")
     if reward <= MIN_PROFIT_USD:
-        return None, f"profit ${reward:.0f} at lot {lot} is not over ${MIN_PROFIT_USD:.0f}"
+        problems.append(f"печалба ${reward:.0f} не е над ${MIN_PROFIT_USD:.0f}")
+    if strict and problems:
+        return None, "; ".join(problems)
     return dict(side=side, type=kind, entry=entry, sl=sl, tp=tp, tp_name=tp_name, lot=lot, rr=tp_d / sl_d,
-                risk=risk, reward=reward, time=c['time'], balance=balance, budget=budget), None
+                risk=risk, reward=reward, time=c['time'], balance=balance, budget=budget, problems=problems), None
 
 
 def usd_events():
@@ -376,9 +381,103 @@ def push_text(p, score, verdict, final, ai):
     return [cut(sig), "🤖 AI: няма отговор, виж CMD"] if ai else [cut(sig)]
 
 
+AI_ALERT_SYSTEM = (
+    "You are a disciplined, rule-based trading analyst for Bollinger Bands (20, 2) on XAUUSD M5. Price is near an "
+    "outer band RIGHT NOW and the current candle is NOT closed yet. Decide what the trader should do now: BUY, SELL "
+    "or WAIT. Consider both a reversion back to the middle band and a continuation along the band (band walk). "
+    "Never predict with certainty, never use emotional language. Judge only from the candles, numbers and news given. "
+    "If you say BUY or SELL, give entry, stop and target prices. WAIT is a valid answer when nothing is clear. "
+    "Account: $5,000, $200 daily loss limit, fixed lot 0.10 ($10 per $1 gold move). Reply with JSON only: "
+    '{"action": "BUY" or "SELL" or "WAIT", "confidence": 1-5, "entry": number or null, "sl": number or null, '
+    '"tp": number or null, "summary_bg": "2-3 sentences in Bulgarian: what to do and why", '
+    '"invalidation": "in Bulgarian: what would prove it wrong"}')
+ACTION_BG = {"BUY": "КУПУВАЙ", "SELL": "ПРОДАВАЙ", "WAIT": "ЧАКАЙ"}
+
+
+def ai_json(system, msg):
+    data, text = call_ai(system, msg)
+    if not data:
+        return {"error": text}
+    try:
+        return json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        log.error(f"AI reply had no valid JSON (stop_reason={data.get('stop_reason')}): {text[:500]!r}")
+        return {"error": f"no JSON, stop_reason={data.get('stop_reason')}"}
+
+
+def check_near_alert(df):
+    tick = mt5.symbol_info_tick(SYMBOL)
+    c0 = df.iloc[-1]
+    if tick is None or pd.isna(c0['upper']):
+        return
+    zone = NEAR_ZONE * c0['width']
+    if tick.bid >= c0['upper'] - zone:
+        band, band_bg, side = "UPPER", "горната", "SELL"
+    elif tick.ask <= c0['lower'] + zone:
+        band, band_bg, side = "LOWER", "долната", "BUY"
+    else:
+        return
+    if time.time() - state["alerts"].get(band, 0) < ALERT_EVERY_MIN * 60:
+        return
+    state["alerts"][band] = time.time()
+
+    live = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    walk = band_walk(live)[0]
+    plan, why = build_plan(live, side, 'REVERSION', strict=False)
+    price = tick.bid if band == "UPPER" else tick.ask
+    head = [f"Цена {price:.2f} | Горна {c0['upper']:.2f} | Средна {c0['middle']:.2f} | Долна {c0['lower']:.2f}",
+            f"Пазар: " + {"DOWN": "пълзене по долната лента", "UP": "пълзене по горната лента"}.get(walk, "няма тренд по лентата"),
+            "⚠️ Свещта още не е затворена", ""]
+    copy = None
+    if plan:
+        checks, score, verdict, facts = checklist(live, plan, walk)
+        head += [f"Класически {SIDE_BG[side]}: вход ~{plan['entry']:.2f} | SL {plan['sl']:.2f} | TP {plan['tp']:.2f}",
+                 f"Лот {plan['lot']} | Риск ${plan['risk']:.0f} | Печалба ${plan['reward']:.0f} | R:R {plan['rr']:.2f}",
+                 f"Правила {score}/5 -> {VERDICT_BG[verdict]}"]
+        head += [f"{'✅' if ok else '❌'} {n}" for n, ok in checks.items()]
+        head += [f"⚠️ {p}" for p in plan['problems']]
+        if facts['news_now']:
+            head += [f"❌ Важна новина до {NEWS_WINDOW_MIN} мин: " + "; ".join(facts['news_now'])]
+        copy = [("Вход", f"{plan['entry']:.2f}"), ("SL", f"{plan['sl']:.2f}"), ("TP", f"{plan['tp']:.2f}")]
+    else:
+        checks, facts = {}, {"band_walk": walk}
+        head.append(f"Класически план не може да се сметне: {why}")
+
+    ai = None
+    if AI_ENABLED and API_KEY:
+        h = df.iloc[-(AI_CANDLES + 1):][['time', 'open', 'high', 'low', 'close', 'upper', 'middle', 'lower', 'rsi']].copy()
+        h['time'] = h['time'].dt.strftime('%m-%d %H:%M')
+        msg = (f"Price {price:.2f} is near the {band} band now. The last row is the forming candle.\n"
+               f"Classic plan: {json.dumps({k: (round(v, 2) if isinstance(v, float) else str(v)) for k, v in (plan or {}).items()}, ensure_ascii=False)}\n"
+               f"Rules: {json.dumps({k: bool(v) for k, v in checks.items()}, ensure_ascii=False)}\n"
+               f"Facts: {json.dumps(facts, ensure_ascii=False, default=str)}\nNews: {news_summary() or 'not available'}\n\n"
+               f"Last {AI_CANDLES} M5 candles:\n{h.round(2).to_csv(index=False)}")
+        ai = ai_json(AI_ALERT_SYSTEM, msg)
+    if ai and "error" not in ai:
+        act = ai.get("action", "WAIT")
+        head += ["", f"🤖 AI: {ACTION_BG.get(act, act)} (увереност {ai.get('confidence')}/5)", ai.get("summary_bg", "")]
+        if act in ("BUY", "SELL") and ai.get("entry") and ai.get("sl") and ai.get("tp"):
+            head.append(f"AI нива: вход {ai['entry']} | SL {ai['sl']} | TP {ai['tp']}")
+            copy = [("Вход", str(ai['entry'])), ("SL", str(ai['sl'])), ("TP", str(ai['tp']))]
+        if ai.get("invalidation"):
+            head.append(f"Грешно, ако: {ai['invalidation']}")
+        act_bg = ACTION_BG.get(act, act)
+    else:
+        act_bg = "няма AI отговор"
+        if ai:
+            head += ["", f"🤖 AI проверката не се получи ({ai['error']})"]
+    title = f"👀 {SYMBOL} до {band_bg} лента - AI: {act_bg}"
+    notify(title, "\n".join(head + ["", f"Изпратено {datetime.now():%H:%M:%S}"]), copy=copy,
+           push=f"{title}\n" + "\n".join(head[:1] + head[-3:]))
+
+
 def iteration():
     df = get_candles()
-    if df.empty or pd.isna(df.iloc[-2]['upper']) or df.iloc[-2]['time'] == state["candle"]:
+    if df.empty or pd.isna(df.iloc[-2]['upper']):
+        return
+    if NEAR_ALERTS:
+        check_near_alert(df)
+    if df.iloc[-2]['time'] == state["candle"]:
         return
     c = df.iloc[-2]
     state["candle"] = c['time']
